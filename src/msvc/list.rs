@@ -18,7 +18,8 @@ pub struct List<N, T, A = Global> // std::list
 where N: ListSingleNode<T, A>,
       A: Allocator + Clone
 {
-    first: Option<NonNull<N>>,
+    // first: Option<NonNull<N>>,
+    head: *mut N,
     len: usize,
     _allocator: A,
     _data: PhantomData<T>
@@ -40,47 +41,80 @@ where N: ListSingleNode<T, A>,
 {
     fn new_inner(alloc: A) -> Self {
         assert!(std::mem::size_of::<A>() == 0, "Allocator must be zero-sized!");
+        let head = N::new_nil(alloc.clone());
         Self {
-            first: None,
+            head,
             len: 0,
             _allocator: alloc,
             _data: PhantomData
         }
     }
     pub fn len(&self) -> usize { self.len }
-    pub fn is_empty(&self) -> bool { self.first.is_none() }
+    pub fn is_empty(&self) -> bool { self.len == 0 }
     pub fn first(&self) -> Option<&N> {
-        unsafe { self.first.map(|f| f.as_ref()) }
+        unsafe { (&*self.head).next(self.head) }
     }
     pub fn first_mut(&mut self) -> Option<&mut N> {
-        unsafe { self.first.map(|mut f| f.as_mut()) }
+        unsafe { (&mut *self.head).next_mut(self.head) }
     }
+    pub fn get_nil(&self) -> *mut N { self.head }
     pub fn last(&self) -> Option<&N> {
-        let mut target_node = self.first;
-        while let Some(v) = target_node {
-            target_node = unsafe { v.as_ref() }.next();
+        let mut curr = self.first();
+        if curr.is_none() { return None };
+        while curr.as_ref().unwrap().next(self.head).is_some() {
+            curr = curr.unwrap().next(self.head);
         }
-        target_node.map(|f| unsafe { f.as_ref() })
+        curr
     }
     pub fn last_mut(&mut self) -> Option<&mut N> {
-        let mut iter = self.first;
-        let mut target_node = iter;
-        while let Some(mut v) = iter {
-            iter = unsafe { v.as_mut() }.next();
-            target_node = Some(v);
+        let head = self.head;
+        let mut curr = self.first_mut();
+        if curr.is_none() { return None };
+        while curr.as_mut().unwrap().next_mut(head).is_some() {
+            curr = curr.unwrap().next_mut(head);
         }
-        target_node.map(|mut f| unsafe { f.as_mut() })
+        curr
     }
+
     pub fn push(&mut self, val: T) {
+        let head = self.head;
         let alloc = self._allocator.clone();
-        let new = Some(N::new(val, alloc));
+        let new = N::new(val, alloc, head); 
         match self.last_mut() {
-            Some(v) => v.set_next(new),
-            None => self.first = new // first entry
+            Some(v) => v.set_next(new, head),
+            // set first entry
+            None => unsafe { (&mut *head).set_next(new, head) }
         };
         self.len += 1;
     }
+
+    pub fn insert(&mut self, after_index: usize, val: T) {
+        assert!(self.len > after_index, "Tried to insert value out of bounds");
+        let head = self.head;
+        let allocator = self._allocator.clone();
+        let insert_after = self.get_unchecked_mut(after_index);
+        let new = N::new(val, allocator, head);
+        if insert_after.next(head).is_some() {
+            unsafe { (&mut *new).set_next(&raw mut *insert_after.next_mut(head).unwrap(), head) };
+        }
+        insert_after.set_next(new, head);
+        self.len += 1;
+    }
+
+    pub(crate) unsafe fn insert_after_unchecked(&mut self, insert_after: *mut N, val: T) {
+        let head = self.head;
+        let allocator = self._allocator.clone();
+        let new = N::new(val, allocator, head);
+        let insert_after = &mut *insert_after;
+        if insert_after.next(head).is_some() {
+            (&mut *new).set_next(&raw mut *insert_after.next_mut(head).unwrap(), head);
+        }
+        insert_after.set_next(new, head);
+        self.len += 1;
+    }
+
     pub fn pop(&mut self) -> Option<T> {
+        let head = self.head;
         if self.is_empty() { return None }
         // get last entry value
         let last = self.last_mut().unwrap();
@@ -93,42 +127,44 @@ where N: ListSingleNode<T, A>,
             let prev_index = self.len - 2;
             self.get_mut(prev_index).unwrap()
         };
-        prev.set_next(None);
-        if self.len == 1 { self.first = None; }
+        prev.set_next(head, head);
+        // if self.len == 1 { self.first = None; }
         self.len -= 1;
         Some(value)
     }
     pub fn get(&self, index: usize) -> Option<&N> {
         let mut curr = self.first();
         for _ in 0..index {
-            if curr.is_none() { return None }
-            curr = unsafe { curr.unwrap().next().map(|f| f.as_ref()) };
+            curr = match curr {
+                Some(v) => v.next(self.head),
+                None => return None
+            };
         }
         curr
     }
     pub fn get_mut(&mut self, index: usize) -> Option<&mut N> {
+        let head = self.head;
         let mut curr = self.first_mut();
         for _ in 0..index {
-            if curr.is_none() { return None }
-            curr = unsafe { curr.unwrap().next().map(|mut f| f.as_mut()) };
+            curr = match curr {
+                Some(v) => v.next_mut(head),
+                None => return None
+            };
         }
         curr
     }
     pub fn get_unchecked(&self, index: usize) -> &N {
         assert!(self.len > index, "Tried to access out of bounds");
-        let mut curr = self.first();
-        for _ in 0..index {
-            curr = unsafe { curr.unwrap().next().map(|f| f.as_ref()) };
-        }
-        curr.unwrap()
+        let mut curr = self.first().unwrap();
+        for _ in 0..index { curr = curr.next(self.head).unwrap() }
+        curr
     }
     pub fn get_unchecked_mut(&mut self, index: usize) -> &mut N {
+        let head = self.head;
         assert!(self.len > index, "Tried to access out of bounds");
-        let mut curr = self.first_mut();
-        for _ in 0..index {
-            curr = unsafe { curr.unwrap().next().map(|mut f| f.as_mut()) };
-        }
-        curr.unwrap()
+        let mut curr = self.first_mut().unwrap();
+        for _ in 0..index { curr = curr.next_mut(head).unwrap() }
+        curr
     }
     pub fn iter(&self) -> ListIterator<'_, N, T, A> { self.into_iter() }
     pub fn iter_mut(&mut self) -> ListIteratorMut<'_, N, T, A> { self.into_iter() }
@@ -199,6 +235,7 @@ where N: ListSingleNode<T, A>,
     type IntoIter = ListIterator<'a, N, T, A>;
     fn into_iter(self) -> Self::IntoIter {
         Self::IntoIter {
+            nil: self.head,
             curr: self.first(),
             _type_marker: PhantomData::<T>,
             _alloc_marker: PhantomData::<A>
@@ -214,6 +251,7 @@ where N: ListSingleNode<T, A>,
     type IntoIter = ListIteratorMut<'a, N, T, A>;
     fn into_iter(self) -> Self::IntoIter {
         Self::IntoIter {
+            nil: self.head,
             curr: self.first_mut(),
             _type_marker: PhantomData::<T>,
             _alloc_marker: PhantomData::<A>
@@ -225,6 +263,7 @@ pub struct ListIterator<'a, N, T, A>
 where N: ListSingleNode<T, A>,
       A: Allocator + Clone
 {
+    nil: *mut N,
     curr: Option<&'a N>,
     _type_marker: std::marker::PhantomData<T>,
     _alloc_marker: std::marker::PhantomData<A>
@@ -237,7 +276,7 @@ where N: ListSingleNode<T, A>,
     type Item = &'a T;
     fn next(&mut self) -> Option<Self::Item> {
         self.curr.take().map(|v| {
-            self.curr = v.next().map(|v2| unsafe { v2.as_ref() });
+            self.curr = v.next(self.nil);
             v.value()
         })
     }
@@ -247,6 +286,7 @@ pub struct ListIteratorMut<'a, N, T, A>
 where N: ListSingleNode<T, A>,
       A: Allocator + Clone
 {
+    nil: *mut N,
     curr: Option<&'a mut N>,
     _type_marker: std::marker::PhantomData<T>,
     _alloc_marker: std::marker::PhantomData<A>
@@ -259,7 +299,7 @@ where N: ListSingleNode<T, A>,
     type Item = &'a mut T;
     fn next(&mut self) -> Option<Self::Item> {
         self.curr.take().map(|v| {
-            self.curr = v.next().map(|mut v2| unsafe { v2.as_mut() });
+            self.curr = unsafe { v.next_ptr(self.nil).map(|mut f| f.as_mut()) };
             v.value_mut()
         })
     }
@@ -270,11 +310,12 @@ where N: ListSingleNode<T, A>,
       A: Allocator + Clone
 {
     fn drop(&mut self) {
-        let mut curr_node = self.first;
-        while let Some(mut v) = curr_node {
-            curr_node = unsafe { v.as_mut() }.next();
-            unsafe { std::ptr::drop_in_place(v.as_ptr()) };
-        }   
+        let mut curr_node = self.first();
+        while let Some(v) = curr_node {
+            curr_node = v.next(self.head);
+            unsafe { std::ptr::drop_in_place(&raw const *v as *mut ListNode<T, A>) };
+        }
+        unsafe { std::ptr::drop_in_place(self.head) };
     }
 }
 
@@ -284,10 +325,7 @@ where N: ListSingleNode<T, A>,
 {
     type Output = T;
     fn index(&self, index: usize) -> &Self::Output {
-        assert!(self.len > index, "Tried to access out of bounds");
-        let mut node = unsafe { self.first.unwrap().as_mut() };
-        for _ in 0..index { node = unsafe { node.next().unwrap().as_mut() }; }
-        node.value()
+        self.get_unchecked(index).value()
     }
 }
 
@@ -296,10 +334,7 @@ where N: ListSingleNode<T, A>,
       A: Allocator + Clone
 {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        assert!(self.len > index, "Tried to access out of bounds");
-        let mut node = unsafe { self.first.unwrap().as_mut() };
-        for _ in 0..index { node = unsafe { node.next().unwrap().as_mut() }; }
-        node.value_mut()
+        self.get_unchecked_mut(index).value_mut()
     }
 }
 
@@ -307,8 +342,10 @@ where N: ListSingleNode<T, A>,
 pub struct ListNode<T, A = Global>
 where A: Allocator
 {
-    next: Option<NonNull<Self>>,
-    prev: Option<NonNull<Self>>,
+    // next: Option<NonNull<Self>>,
+    // prev: Option<NonNull<Self>>,
+    next: *mut Self,
+    prev: *mut Self,
     val: T,
     _allocator: A
 }
@@ -317,29 +354,75 @@ where A: Allocator
 pub struct ListForwardNode<T, A = Global>
 where A: Allocator
 {
-    next: Option<NonNull<Self>>,
+    // next: Option<NonNull<Self>>,
+    next: *mut Self,
     val: T,
     _allocator: A
+}
+
+pub trait ListSingleNode<T, A>
+where A: Allocator
+{
+    fn new(val: T, alloc: A, nil: *mut Self) -> *mut Self where Self: Sized;
+    fn new_nil(alloc: A) -> *mut Self where Self: Sized;
+    fn next(&self, nil: *mut Self) -> Option<&Self> where Self: Sized;
+    fn next_mut(&mut self, nil: *mut Self) -> Option<&mut Self> where Self: Sized;
+    fn next_ptr(&mut self, nil: *mut Self) -> Option<NonNull<Self>> where Self: Sized;
+    fn value(&self) -> &T;
+    fn value_mut(&mut self) -> &mut T;
+    fn set_next(&mut self, next: *mut Self, nil: *mut Self) where Self: Sized;
+}
+
+pub trait ListDoubleNode<T, A> : ListSingleNode<T, A>
+where A: Allocator
+{
+    fn prev(&self, nil: *mut Self) -> Option<&Self> where Self: Sized;
+    fn prev_mut(&mut self, nil: *mut Self) -> Option<&mut Self> where Self: Sized;
+    fn prev_ptr(&self, nil: *mut Self) -> Option<NonNull<Self>> where Self: Sized;
 }
 
 impl<T, A> ListSingleNode<T, A> for ListNode<T, A>
 where A: Allocator + Clone
 {
-    fn new(val: T, alloc: A) -> NonNull<Self> where Self: Sized {
-        let mut new = alloc.allocate(Layout::new::<Self>()).unwrap().cast();
-        let new_edit: &mut ListNode<T, A> = unsafe { new.as_mut() };
-        new_edit.next = None;
-        new_edit.prev = None;
+    fn new(val: T, alloc: A, nil: *mut Self) -> *mut Self where Self: Sized {
+        let new = alloc.allocate(Layout::new::<Self>()).unwrap().as_ptr() as *mut Self;
+        let new_edit: &mut Self = unsafe { &mut *new };
+        new_edit.next = nil;
+        new_edit.prev = nil;
         new_edit.val = val;
+        new
+    }
+
+    fn new_nil(alloc: A) -> *mut Self where Self: Sized {
+        let new = alloc.allocate(Layout::new::<Self>()).unwrap().as_ptr() as *mut Self;
+        let new_edit: &mut Self = unsafe { &mut *new };
+        new_edit.next = new;
+        new_edit.prev = new;
         new_edit._allocator = alloc;
         new
     }
-    fn next(&self) -> Option<NonNull<Self>> where Self: Sized {
-        self.next
+
+    fn next(&self, nil: *mut Self) -> Option<&Self> where Self: Sized {
+        match std::ptr::eq(self.next, nil) {
+            true => None,
+            false => Some(unsafe{&*self.next})
+        }
     }
-    fn set_next(&mut self, next: Option<NonNull<Self>>) where Self: Sized {
-        if let Some(mut v) = next {
-            unsafe { v.as_mut() }.prev = self.next;
+    fn next_mut(&mut self, nil: *mut Self) -> Option<&mut Self> where Self: Sized {
+        match std::ptr::eq(self.next, nil) {
+            true => None,
+            false => Some(unsafe{&mut *self.next})
+        }
+    }
+    fn next_ptr(&mut self, nil: *mut Self) -> Option<NonNull<Self>> where Self: Sized {
+        match std::ptr::eq(self.next, nil) {
+            true => None,
+            false => Some(unsafe{NonNull::new_unchecked(self.next)})
+        }
+    }
+    fn set_next(&mut self, next: *mut Self, nil: *mut Self) where Self: Sized {
+        if next != nil {
+            unsafe { (&mut *next).prev = self.next }
         }
         self.next = next;
     }
@@ -350,25 +433,24 @@ where A: Allocator + Clone
 impl<T, A> ListDoubleNode<T, A> for ListNode<T, A>
 where A: Allocator + Clone
 {
-    fn prev(&self) -> Option<NonNull<Self>> where Self: Sized {
-        self.prev
+    fn prev(&self, nil: *mut Self) -> Option<&Self> where Self: Sized {
+        match std::ptr::eq(self.prev, nil) {
+            true => None,
+            false => Some(unsafe{&*self.prev})
+        }
     }
-}
-
-pub trait ListSingleNode<T, A>
-where A: Allocator
-{
-    fn new(val: T, alloc: A) -> NonNull<Self> where Self: Sized;
-    fn next(&self) -> Option<NonNull<Self>> where Self: Sized;
-    fn value(&self) -> &T;
-    fn value_mut(&mut self) -> &mut T;
-    fn set_next(&mut self, next: Option<NonNull<Self>>) where Self: Sized;
-}
-
-pub trait ListDoubleNode<T, A> : ListSingleNode<T, A>
-where A: Allocator
-{
-    fn prev(&self) -> Option<NonNull<Self>> where Self: Sized;
+    fn prev_mut(&mut self, nil: *mut Self) -> Option<&mut Self> where Self: Sized {
+        match std::ptr::eq(self.prev, nil) {
+            true => None,
+            false => Some(unsafe{&mut *self.prev})
+        }
+    }
+    fn prev_ptr(&self, nil: *mut Self) -> Option<NonNull<Self>> where Self: Sized {
+        match std::ptr::eq(self.prev, nil) {
+            true => None,
+            false => Some(unsafe{NonNull::new_unchecked(self.prev)})
+        }
+    }
 }
 
 impl<N, T, A> Display for List<N, T, A>
@@ -406,7 +488,7 @@ where N: ListSingleNode<T, A>,
 #[cfg(test)]
 pub mod tests {
     use allocator_api2::alloc::Global;
-    use super::{ List, ListNode, ListSingleNode, ListDoubleNode };
+    use super::{ List, ListNode, ListSingleNode };
 
     use std::error::Error;
     type TestReturn = Result<(), Box<dyn Error>>;
@@ -472,6 +554,30 @@ pub mod tests {
         assert!(list.index_of(10) == None, "10 is not in the list");
         assert!(list.index_of_by_predicate(|f| f * 2 == 10) == Some(3), "Fourth element should be found (5)");
         assert!(*list.find_by_predicate(|f| f * 2 == 10).unwrap() == 5, "Should have found foruth element (5)");
+        Ok(())
+    }
+
+    #[test]
+    pub fn list_insertion() -> TestReturn {
+        let mut list = List::new();
+        list.push(1);
+        list.push(3);
+        list.push(5);
+        list.push(7);
+        list.push(9);
+        list.insert(0, 2);
+        assert!(list[1] == 2, "Second list entry should be 2");
+        list.insert(2, 4);
+        assert!(list[3] == 4, "Fourth list entry should be 4");
+        let five = &raw mut *list.get_unchecked_mut(4);
+        let seven = &raw mut *list.get_unchecked_mut(5);
+        unsafe { list.insert_after_unchecked(five, 6); }
+        unsafe { list.insert_after_unchecked(seven, 8); }
+        assert!(list[5] == 6, "Sixth list entry should be 7");
+        assert!(list[7] == 8, "Eighth list entry should be 8");
+        for i in &list {
+            assert!(list[*i-1] == *i, "Element {} should equal {} instead of {}", *i-1, *i, list[*i-1]);
+        }
         Ok(())
     }
 }

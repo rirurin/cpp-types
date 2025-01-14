@@ -55,6 +55,7 @@ where A: Allocator
     pub fn cap(&self) -> usize {
         (self.end as usize - self.first as usize) / std::mem::size_of::<T>()
     }
+    pub fn is_empty(&self) -> bool { self.len() == 0 }
     pub fn resize(&mut self, new: usize) {
         unsafe {
             let alloc = self._allocator.allocate(Self::get_layout(new)).unwrap().as_ptr() as *mut T;

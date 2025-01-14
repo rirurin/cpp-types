@@ -3,6 +3,7 @@ use allocator_api2::alloc::{ Allocator, Global };
 use std::{
     alloc::Layout,
     fmt::{ Debug, Display },
+    hash::{ Hash, Hasher },
     mem::size_of,
     ptr::NonNull,
     string::String as RustString
@@ -110,7 +111,7 @@ where T: CharBehavior + PartialEq,
     pub fn clear(&mut self) { self.size = 0; }
     pub fn as_bytes(&self) -> &[u8] { unsafe { std::slice::from_raw_parts(self.get_ptr() as *const u8, self.size * std::mem::size_of::<T>()) } }
     pub fn len(&self) -> usize { self.size }
-    pub fn capacity(&self) -> usize { self.capacity } 
+    pub fn capacity(&self) -> usize { self.capacity }
 }
 
 impl<A> String<u8, A>
@@ -118,13 +119,10 @@ where A: Allocator
 {
     pub fn from_str_in(text: &str, alloc: A) -> Self {
         let mut new = Self::new_in(alloc);
-        new.resize(text.len() + 1);
+        new.resize(text.len());
         // string slice is already UTF-8, so just memcpy it
         unsafe { std::ptr::copy_nonoverlapping(text.as_ptr(), new.get_ptr_mut(), text.len()); }
         new.size = text.len();
-        // add null terminator
-        unsafe { *new.get_ptr_mut().add(new.size) = 0; }
-        new.size += 1;
         new
     }
 
@@ -132,12 +130,8 @@ where A: Allocator
         if self.len() + str.len() > self.capacity() { // round to nearest power of 2
             self.resize(1 << usize::BITS - (self.len() + str.len()).leading_zeros());
         }
-        // -1 to overwrite prev null terminator
-        unsafe { std::ptr::copy_nonoverlapping(str.as_ptr(), self.get_ptr_mut().add(self.len() - 1), str.len()); }
-        self.size = self.len() + str.len() - 1;
-        // add null terminator
-        unsafe { *self.get_ptr_mut().add(self.len()) = 0; }
-        self.size += 1;
+        unsafe { std::ptr::copy_nonoverlapping(str.as_ptr(), self.get_ptr_mut().add(self.len()), str.len()); }
+        self.size += str.len();
     }
 }
 
@@ -146,13 +140,10 @@ where A: Allocator
 {
     pub fn from_str_in(text: &str, alloc: A) -> Self {
         let mut new = Self::new_in(alloc);
-        new.resize(text.len() + 1);
+        new.resize(text.len());
         let utf16: Vec<u16> = text.encode_utf16().collect(); // convert UTF-8 => UTF-16
         unsafe { std::ptr::copy_nonoverlapping(utf16.as_ptr(), new.get_ptr_mut(), utf16.len()); }
         new.size = text.len();
-        // add null terminator
-        unsafe { *new.get_ptr_mut().add(new.size) = 0; }
-        new.size += 1;
         new
     }
     pub fn push_str(&mut self, str: &str) {
@@ -160,12 +151,8 @@ where A: Allocator
             self.resize(1 << usize::BITS - (self.len() + str.len()).leading_zeros());
         }
         let utf16: Vec<u16> = str.encode_utf16().collect(); // convert UTF-8 => UTF-16
-        // -1 to overwrite prev null terminator
-        unsafe { std::ptr::copy_nonoverlapping(utf16.as_ptr(), self.get_ptr_mut().sub(1), utf16.len()); }
-        self.size = self.len() + str.len() - 1;
-        // add null terminator
-        unsafe { *self.get_ptr_mut().add(self.size) = 0; }
-        self.size += 1;
+        unsafe { std::ptr::copy_nonoverlapping(utf16.as_ptr(), self.get_ptr_mut(), utf16.len()); }
+        self.size += str.len();
     }
 }
 
@@ -200,8 +187,7 @@ where A: Allocator
     fn from(value: &String<u8, A>) -> Self {
         if value.size > 0 {
             let vp = value.get_ptr();
-            // subtract one to remove null terminator
-            let s = unsafe { std::slice::from_raw_parts(vp, value.size - 1) };
+            let s = unsafe { std::slice::from_raw_parts(vp, value.size) };
             unsafe { std::str::from_utf8_unchecked(s) }
         } else {
             ""
@@ -214,8 +200,7 @@ where A: Allocator
 {
     fn from(value: &String<u8, A>) -> Self {
         let vp = value.get_ptr();
-        // subtract one to remove null terminator
-        let s = unsafe { std::slice::from_raw_parts(vp, value.size - 1) };
+        let s = unsafe { std::slice::from_raw_parts(vp, value.size) };
         Self::from(unsafe {std::str::from_utf8_unchecked(s)})
     }
 }
@@ -225,8 +210,7 @@ where A: Allocator
 {
     fn from(value: &String<u16, A>) -> Self {
         let vp = value.get_ptr();
-        // subtract one to remove null terminator
-        let s = unsafe { std::slice::from_raw_parts(vp, value.size - 1) };
+        let s = unsafe { std::slice::from_raw_parts(vp, value.size) };
         RustString::from_utf16_lossy(s)
     }
 }
@@ -267,6 +251,15 @@ where A: Allocator
     }
 }
 
+impl<T, A> Hash for String<T, A>
+where T: CharBehavior + PartialEq,
+      A: Allocator
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write(self.as_bytes()) 
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::String;
@@ -290,9 +283,10 @@ pub mod tests {
         // 45 characters, including null terminator
         let s = String::from_str("Even if there is some monster behind this...");
         let s_str: &str = (&s).into();
+        println!("c: {}, l: {}", s.capacity(), s.len());
         assert!(s_str == "Even if there is some monster behind this...", "Text doesn't match");
-        assert!(s.len() == 45, "Length should be 45");
-        assert!(s.capacity() == 45, "Capacity should be equal to allocation size");
+        assert!(s.len() == 44, "Length should be 44");
+        assert!(s.capacity() == 44, "Capacity should be equal to allocation size");
         Ok(())
     }
 
@@ -302,7 +296,7 @@ pub mod tests {
         let s = String::from_str("True...");
         let s_str: &str = (&s).into();
         assert!(s_str == "True...", "Text doesn't match");
-        assert!(s.len() == 8, "Length should be 8");
+        assert!(s.len() == 7, "Length should be 7");
         assert!(s.capacity() == 16, "Capacity should be equal to storage size");
         Ok(())
     }
@@ -310,7 +304,7 @@ pub mod tests {
     #[test]
     pub fn check_string_as_bytes() -> TestReturn {
         let s = String::from_str("True...");
-        assert!(s.as_bytes() == [0x54, 0x72, 0x75, 0x65, 0x2E, 0x2E, 0x2E, 0x0],
+        assert!(s.as_bytes() == [0x54, 0x72, 0x75, 0x65, 0x2E, 0x2E, 0x2E],
         "Byte representation doesn't match");
         Ok(())
     }
@@ -318,17 +312,17 @@ pub mod tests {
     #[test]
     pub fn create_mutable_string() -> TestReturn {
         let mut s = String::from_str("GALLICA!");
-        assert!(s.len() == 9, "Length should be 9");
+        assert!(s.len() == 8, "Length should be 8");
         // short push, stays inline
         s.push_str(" THE");
-        assert!(s.len() == 13, "Length should be 13");
+        assert!(s.len() == 12, "Length should be 12");
         // large push, move to allocation
         s.push_str(" SOUND OF YOUR WINGS KEEPS ME UP AT NIGHT!");
-        assert!(s.len() == 55, "Length should be 55");
+        assert!(s.len() == 54, "Length should be 54");
         assert!(s.as_bytes() == [ 0x47, 0x41, 0x4C, 0x4C, 0x49, 0x43, 0x41, 0x21, 0x20, 0x54, 0x48, 0x45, 0x20, 0x53, 0x4F, 0x55,
 0x4E, 0x44, 0x20, 0x4F, 0x46, 0x20, 0x59, 0x4F, 0x55, 0x52, 0x20, 0x57, 0x49, 0x4E, 0x47, 0x53,
 0x20, 0x4B, 0x45, 0x45, 0x50, 0x53, 0x20, 0x4D, 0x45, 0x20, 0x55, 0x50, 0x20, 0x41, 0x54, 0x20,
-0x4E, 0x49, 0x47, 0x48, 0x54, 0x21, 0x00 ], "Bytes don't match");
+0x4E, 0x49, 0x47, 0x48, 0x54, 0x21], "Bytes don't match");
         s.clear();
         assert!(s.len() == 0, "Length should be zero");
         assert!(s.as_bytes() == [], "Bytes don't match");

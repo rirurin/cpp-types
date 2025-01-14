@@ -2,6 +2,7 @@ pub mod generic {
     pub mod string;
 }
 pub mod msvc {
+    pub mod hash;
     pub mod list;
     pub mod mutex;
     pub mod shared_ptr;
