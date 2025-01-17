@@ -20,7 +20,7 @@ impl CharBehavior for u16 { } // std::wstring
 #[repr(C)]
 pub struct String<T = u8, A = Global>
 where T: CharBehavior + PartialEq,
-      A: Allocator
+      A: Allocator + Clone
 {
     storage: [u8; MAX_STORAGE_SIZE],
     size: usize,
@@ -36,24 +36,24 @@ impl String<u8, Global> {
 
 impl String<u16, Global> {
     pub fn new_wide() -> Self { Self::new_using_wide(Global) }
-    pub fn from_str_wide(text: &str) -> Self { Self::from_str_in(text, Global) }
+    pub fn from_str_wide(text: &str) -> Self { Self::from_str_in_wide(text, Global) }
 }
 
 impl<A> String<u8, A>
-where A: Allocator
+where A: Allocator + Clone
 {
     pub fn new_using(alloc: A) -> Self { Self::new_in(alloc) }
 }
 
 impl<A> String<u16, A>
-where A: Allocator
+where A: Allocator + Clone
 {
     pub fn new_using_wide(alloc: A) -> Self { Self::new_in(alloc) }
 }
 
 impl<T, A> String<T, A>
 where T: CharBehavior + PartialEq,
-      A: Allocator
+      A: Allocator + Clone
 {
     pub fn new_in(alloc: A) -> Self {
         assert!(std::mem::size_of::<A>() == 0, "Allocator must be zero-sized!");
@@ -115,7 +115,7 @@ where T: CharBehavior + PartialEq,
 }
 
 impl<A> String<u8, A>
-where A: Allocator
+where A: Allocator + Clone + Clone
 {
     pub fn from_str_in(text: &str, alloc: A) -> Self {
         let mut new = Self::new_in(alloc);
@@ -136,9 +136,9 @@ where A: Allocator
 }
 
 impl<A> String<u16, A>
-where A: Allocator
+where A: Allocator + Clone
 {
-    pub fn from_str_in(text: &str, alloc: A) -> Self {
+    pub fn from_str_in_wide(text: &str, alloc: A) -> Self {
         let mut new = Self::new_in(alloc);
         new.resize(text.len());
         let utf16: Vec<u16> = text.encode_utf16().collect(); // convert UTF-8 => UTF-16
@@ -158,7 +158,7 @@ where A: Allocator
 
 impl<T, A> Drop for String<T, A>
 where T: CharBehavior + PartialEq,
-      A: Allocator
+      A: Allocator + Clone
 {
     fn drop(&mut self) {
         if !self.is_inline() { self.drop_inner() }
@@ -167,14 +167,14 @@ where T: CharBehavior + PartialEq,
 
 impl<T, A> PartialEq for String<T, A>
 where T: CharBehavior + PartialEq,
-      A: Allocator
+      A: Allocator + Clone
 {
     fn eq(&self, other: &Self) -> bool {
         if self.size != other.size { return false; }
         let sp = self.get_ptr();
         let op = other.get_ptr();
         for i in 0..self.size {
-            unsafe { if *sp.add(i) == *op.add(i) { 
+            unsafe { if *sp.add(i) != *op.add(i) { 
                 return false; 
             }}
         }
@@ -182,7 +182,7 @@ where T: CharBehavior + PartialEq,
     }
 }
 impl<A> From<&String<u8, A>> for &str
-where A: Allocator
+where A: Allocator + Clone
 {
     fn from(value: &String<u8, A>) -> Self {
         if value.size > 0 {
@@ -196,7 +196,7 @@ where A: Allocator
 }
 
 impl<A> From<&String<u8, A>> for RustString
-where A: Allocator
+where A: Allocator + Clone
 {
     fn from(value: &String<u8, A>) -> Self {
         let vp = value.get_ptr();
@@ -206,7 +206,7 @@ where A: Allocator
 }
 
 impl<A> From<&String<u16, A>> for RustString
-where A: Allocator
+where A: Allocator + Clone
 {
     fn from(value: &String<u16, A>) -> Self {
         let vp = value.get_ptr();
@@ -216,7 +216,7 @@ where A: Allocator
 }
 
 impl<A> Debug for String<u8, A>
-where A: Allocator
+where A: Allocator + Clone
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let as_str: &str = self.into();
@@ -225,7 +225,7 @@ where A: Allocator
 }
 
 impl<A> Debug for String<u16, A>
-where A: Allocator
+where A: Allocator + Clone
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let as_str: RustString = self.into();
@@ -234,7 +234,7 @@ where A: Allocator
 }
 
 impl<A> Display for String<u8, A>
-where A: Allocator
+where A: Allocator + Clone
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let as_str: &str = self.into();
@@ -243,7 +243,7 @@ where A: Allocator
 }
 
 impl<A> Display for String<u16, A>
-where A: Allocator
+where A: Allocator + Clone
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let as_str: RustString = self.into();
@@ -253,10 +253,39 @@ where A: Allocator
 
 impl<T, A> Hash for String<T, A>
 where T: CharBehavior + PartialEq,
-      A: Allocator
+      A: Allocator + Clone
 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write(self.as_bytes()) 
+    }
+}
+
+impl<T, A> Clone for String<T, A>
+where T: CharBehavior + PartialEq,
+      A: Allocator + Clone
+{
+    fn clone(&self) -> Self {
+        let storage = if self.is_inline() {
+            unsafe { std::ptr::read(&raw const self.storage) }
+        } else {
+            // make new allocation
+            unsafe {
+                let mut out = [0; MAX_STORAGE_SIZE];
+                let new = self._allocator.allocate(self.get_layout()).unwrap().as_ptr() as *mut T;
+                if self.size > 0 {
+                    std::ptr::copy_nonoverlapping(self.get_ptr(), new, self.capacity);
+                }
+                std::ptr::write(out.as_mut_ptr() as *mut *mut T, new);
+                out
+            } 
+        };
+        Self {
+            storage,
+            size: self.size,
+            capacity: self.capacity,
+            _allocator: self._allocator.clone(),
+            _char_type: std::marker::PhantomData
+        }
     }
 }
 
@@ -283,7 +312,6 @@ pub mod tests {
         // 45 characters, including null terminator
         let s = String::from_str("Even if there is some monster behind this...");
         let s_str: &str = (&s).into();
-        println!("c: {}, l: {}", s.capacity(), s.len());
         assert!(s_str == "Even if there is some monster behind this...", "Text doesn't match");
         assert!(s.len() == 44, "Length should be 44");
         assert!(s.capacity() == 44, "Capacity should be equal to allocation size");
@@ -326,6 +354,16 @@ pub mod tests {
         s.clear();
         assert!(s.len() == 0, "Length should be zero");
         assert!(s.as_bytes() == [], "Bytes don't match");
+        Ok(())
+    }
+
+    #[test]
+    pub fn string_compare() -> TestReturn {
+        let s0 = String::from_str("True...");
+        let s1 = s0.clone();
+        assert!(s0 == s1, "String s0 (True...) should equal s1 (also True...)");
+        let s2 = String::from_str("False!");
+        assert!(s0 != s2, "String s0 (True...) should not equal s2 (False!)");
         Ok(())
     }
 }

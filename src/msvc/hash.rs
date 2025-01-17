@@ -49,15 +49,15 @@ pub mod tests {
 
     #[test]
     pub fn hash_cpp_string() -> TestReturn { 
-        check_hash("Player", 0x333DC56DDFFD8EA0);
-        check_hash("Enemy0", 0xE24F0CA51E957E61);
-        check_hash("Enemy1", 0xE24F0BA51E957CAE);
-        check_hash("Enemy2", 0xE24F0AA51E957AFB);
-        check_hash("Enemy3", 0xE24F09A51E957948);
-        check_hash("Enemy4", 0xE24F10A51E95852D);
-        check_hash("Chest", 0x4295BDDCA90BEC76);
-        check_hash("Door", 0x37CF773608CE6C9);
-        check_hash("Door2", 0x7A3F740D0F6C7C81);
+        check_hash("Player", 0x333DC56DDFFD8EA0); // & 7 == 0
+        check_hash("Enemy0", 0xE24F0CA51E957E61); // & 7 == 1
+        check_hash("Enemy1", 0xE24F0BA51E957CAE); // & 7 == 6
+        check_hash("Enemy2", 0xE24F0AA51E957AFB); // & 7 == 3
+        check_hash("Enemy3", 0xE24F09A51E957948); // & 7 == 0
+        check_hash("Enemy4", 0xE24F10A51E95852D); // & 7 == 5
+        check_hash("Chest", 0x4295BDDCA90BEC76); // & 7 == 6
+        check_hash("Door", 0x37CF773608CE6C9); // & 7 == 1
+        check_hash("Door2", 0x7A3F740D0F6C7C81); // 0x3f == 1
         Ok(())
     }
 }
