@@ -605,14 +605,14 @@ where C: TreeCompare<T, T>,
 
 #[repr(C)]
 pub struct MapPair<K, V>
-where K: PartialEq + PartialOrd + Hash
+where K: PartialEq + PartialOrd
 {
     key: K,
     value: V
 }
 
 impl<K, V> MapPair<K, V>
-where K: PartialEq + PartialOrd + Hash
+where K: PartialEq + PartialOrd
 {
     pub fn new(key: K, value: V) -> Self {
         Self { key, value }
@@ -658,14 +658,6 @@ where K: PartialEq + PartialOrd + Hash
 {
     fn partial_cmp(&self, other: &K) -> Option<std::cmp::Ordering> {
         self.key.partial_cmp(other)
-    }
-}
-
-impl<K, V> Hash for MapPair<K, V>
-where K: PartialEq + PartialOrd + Hash
-{
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.key.hash(state)
     }
 }
 

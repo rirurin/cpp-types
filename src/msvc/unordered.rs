@@ -6,7 +6,6 @@ use crate::msvc::{
         List, ListDoubleNode, ListSingleNode, 
         ListNode, ListIterator, ListIteratorMut 
     },
-    tree::MapPair,
     vector::Vector
 };
 use std::{
@@ -365,22 +364,73 @@ where H: Hasher + HasherInit,
 }
 
 // https://en.cppreference.com/w/cpp/container/unordered_map
+
+#[repr(C)]
+pub struct MapPair<K, V>
+where K: PartialEq + Hash
+{
+    key: K,
+    value: V
+}
+
+impl<K, V> MapPair<K, V>
+where K: PartialEq + Hash
+{
+    pub fn new(key: K, value: V) -> Self {
+        Self { key, value }
+    }
+    pub fn get_key(&self) -> &K { &self.key }
+    pub fn get_value(&self) -> &V { &self.value }
+    pub fn get_key_mut(&mut self) -> &mut K { &mut self.key }
+    pub fn get_value_mut(&mut self) -> &mut V { &mut self.value }
+}
+
+impl<K, V> MapPair<K, V>
+where K: PartialEq + Copy + Hash
+{
+    pub fn get_key_copy(&self) -> K { self.key }
+}
+
+impl<K, V> Hash for MapPair<K, V>
+where K: PartialEq + Hash
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key.hash(state)
+    }
+}
+
+impl<K, V> PartialEq for MapPair<K, V>
+where K: PartialEq + Hash
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl<K, V> PartialEq<K> for MapPair<K, V>
+where K: PartialEq + Hash
+{
+    fn eq(&self, other: &K) -> bool {
+        self.key == *other
+    }
+}
+
 #[repr(C)]
 pub struct Map<H, K, V, A = Global>
 where H: Hasher + HasherInit,
-      K: PartialEq + PartialOrd + Hash,
+      K: PartialEq + Hash,
       A: Allocator + Clone
 { _impl: HashTable<H, MapPair<K, V>, K, A> }
 // C++ API
 impl<K, V> Map<FNV1A, K, V, Global>
-where K: PartialEq + PartialOrd + Hash
+where K: PartialEq + Hash
 {
     pub fn new() -> Self { Self::new_in(Global) }
 }
 
 impl<H, K, V, A> Map<H, K, V, A>
 where H: Hasher + HasherInit,
-      K: PartialEq + PartialOrd + Hash,
+      K: PartialEq + Hash,
       A: Allocator + Clone
 {
     /// Constructs the unordered_map
@@ -402,11 +452,21 @@ where H: Hasher + HasherInit,
         let pair = MapPair::new(key, value);
         self._impl.insert(pair) 
     }
+    pub fn iter(&self) -> ListIterator<'_, ListNode<MapPair<K, V>, A>, MapPair<K, V>, A> { self.into_iter() }
+    pub fn iter_mut(&mut self) -> ListIteratorMut<'_, ListNode<MapPair<K, V>, A>, MapPair<K, V>, A> { self.into_iter() }
+
+    pub fn find(&self, key: &K) -> Option<&MapPair<K, V>> {
+        self._impl.find(key)
+    }
+    pub fn find_mut(&mut self, key: &K) -> Option<&mut MapPair<K, V>> {
+        self._impl.find_mut(key)
+    }
+    pub fn contains(&self, key: &K) -> bool { self._impl.contains(key) }
 }
 
 impl<'a, H, K, V, A> IntoIterator for &'a Map<H, K, V, A>
 where H: Hasher + HasherInit,
-      K: PartialEq + PartialOrd + Hash,
+      K: PartialEq + Hash,
       A: Allocator + Clone
 {
     type Item = &'a MapPair<K, V>;
@@ -416,7 +476,7 @@ where H: Hasher + HasherInit,
 
 impl<'a, H, K, V, A> IntoIterator for &'a mut Map<H, K, V, A>
 where H: Hasher + HasherInit,
-      K: PartialEq + PartialOrd + Hash,
+      K: PartialEq + Hash,
       A: Allocator + Clone
 {
     type Item = &'a mut MapPair<K, V>;
@@ -426,7 +486,7 @@ where H: Hasher + HasherInit,
 
 impl<'a, H, K, V, A> Index<&K> for Map<H, K, V, A>
 where H: Hasher + HasherInit,
-      K: PartialEq + PartialOrd + Hash,
+      K: PartialEq + Hash,
       A: Allocator + Clone
 {
     type Output = MapPair<K, V>;
@@ -435,7 +495,7 @@ where H: Hasher + HasherInit,
 
 impl<'a, H, K, V, A> IndexMut<&K> for Map<H, K, V, A>
 where H: Hasher + HasherInit,
-      K: PartialEq + PartialOrd + Hash,
+      K: PartialEq + Hash,
       A: Allocator + Clone
 {
     fn index_mut(&mut self, index: &K) -> &mut Self::Output { &mut self._impl[index] }
