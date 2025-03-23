@@ -111,6 +111,7 @@ where H: Hasher + HasherInit,
 
     fn iter(&self) -> ListIterator<'_, ListNode<T0, A>, T0, A> { self.into_iter() }
     fn iter_mut(&mut self) -> ListIteratorMut<'_, ListNode<T0, A>, T0, A> { self.into_iter() }
+
 }
 impl<H, T0, T1, A> HashTable<H, T0, T1, A>
 where H: Hasher + HasherInit,

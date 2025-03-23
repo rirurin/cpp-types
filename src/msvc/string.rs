@@ -162,6 +162,8 @@ where T: CharBehavior + PartialEq,
 {
     fn drop(&mut self) {
         if !self.is_inline() { self.drop_inner() }
+        self.size = 0;
+        self.capacity = MAX_STORAGE_SIZE / std::mem::size_of::<T>();
     }
 }
 

@@ -28,6 +28,26 @@ impl Hasher for FNV1A {
     fn finish(&self) -> u64 { self.0 }
 }
 
+pub struct FNV1ARTTI(u64);
+
+impl HasherInit for FNV1ARTTI {
+    fn new() -> Self { Self(FNV_OFFSET_BASIS) }
+    fn get_hash<H>(value: &H) -> u64 where H: Hash {
+        let mut fnv1a = Self::new();
+        value.hash(&mut fnv1a);
+        fnv1a.finish()
+    }
+}
+
+impl Hasher for FNV1ARTTI {
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 = (self.0 ^ *b as u64).overflowing_mul(FNV_PRIME).0
+        }
+    }
+    fn finish(&self) -> u64 { self.0 ^ self.0 >> 0x20 }
+}
+
 #[cfg(test)]
 pub mod tests {
     use crate::msvc::string::String;

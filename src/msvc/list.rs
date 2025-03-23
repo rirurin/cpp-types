@@ -268,11 +268,17 @@ where N: ListSingleNode<T, A> + ListDoubleNode<T, A>,
         unsafe { (&mut *head).set_prev(first, head) }
     }
 
-    pub(crate) fn remove(&mut self, index: usize) -> T {
+    // pub(crate) fn remove(&mut self, index: usize) -> T {
+    pub fn remove(&mut self, index: usize) -> T {
         assert!(self.len > index, "Tried to remove value out of bounds");
         let el = self.get_unchecked_mut(index);
         let el_ptr = &raw mut *el;
         unsafe { self.remove_unchecked(el_ptr) }
+    }
+
+    pub fn remove_checked(&mut self, index: usize) -> Option<T> {
+        if self.len > index { Some(self.remove(index)) }
+        else { None }
     }
 
     unsafe fn unlink(&mut self, p_element: *mut N) {

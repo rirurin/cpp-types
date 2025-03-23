@@ -48,11 +48,11 @@ where A: Allocator + Clone
         unsafe { Layout::from_size_align_unchecked(size, align) }
     }
 
-    unsafe fn get_data_ptr(&self) -> *const T {
+    pub unsafe fn get_data_ptr(&self) -> *const T {
         (&raw const *self).add(1) as *const T
     }
 
-    unsafe fn get_data_ptr_mut(&mut self) -> *mut T {
+    pub unsafe fn get_data_ptr_mut(&mut self) -> *mut T {
         (&raw mut *self).add(1) as *mut T
     }
 
@@ -66,6 +66,15 @@ where A: Allocator + Clone
         unsafe { std::ptr::write(out.get_data_ptr_mut(), data); }
         &raw mut *out
     }
+}
+
+impl<T, A> RefCountObject<T, A>
+where A: Allocator + Clone 
+{
+    // pub fn _debug_strong_count(&self) -> usize { self.uses.load(Ordering::Acquire) as usize }
+    // pub fn _debug_weak_count(&self) -> usize { self.weaks.load(Ordering::Acquire) as usize }
+    pub fn _debug_strong_count(&self) -> usize { self.uses.load(Ordering::SeqCst) as usize }
+    pub fn _debug_weak_count(&self) -> usize { self.weaks.load(Ordering::SeqCst) as usize }
 }
 
 impl<T, A> Drop for RefCountObject<T, A>
@@ -108,8 +117,10 @@ where A: Allocator + Clone
     pub fn get_mut(&mut self) -> &mut T { unsafe { &mut *self._ptr } }
     pub fn get_ptr(&self) -> *mut T { self._ptr }
 
-    pub fn strong_count(&self) -> usize { unsafe { self.get_rep().uses.load(Ordering::Acquire) as usize } }
-    pub fn weak_count(&self) -> usize { unsafe { self.get_rep().weaks.load(Ordering::Acquire) as usize } }
+    // pub fn strong_count(&self) -> usize { unsafe { self.get_rep().uses.load(Ordering::Acquire) as usize } }
+    // pub fn weak_count(&self) -> usize { unsafe { self.get_rep().weaks.load(Ordering::Acquire) as usize } }
+    pub fn strong_count(&self) -> usize { unsafe { self.get_rep().uses.load(Ordering::SeqCst) as usize } }
+    pub fn weak_count(&self) -> usize { unsafe { self.get_rep().weaks.load(Ordering::SeqCst) as usize } }
 
     pub fn unique(&self) -> bool { self.strong_count() == 1 }
 
@@ -123,7 +134,8 @@ where A: Allocator + Clone
     // leaves the current scope.
     pub fn from_raw(mut ptr: NonNull<RefCountObject<T, A>>) -> Option<Self> {
         let r = unsafe { ptr.as_mut() };
-        match r.uses.load(Ordering::Acquire) {
+        // match r.uses.load(Ordering::Acquire) {
+        match r.uses.load(Ordering::SeqCst) {
             0 => None,
             _ => Some(Self { 
                 _ptr: unsafe { r.get_data_ptr_mut() }, 
@@ -135,7 +147,8 @@ where A: Allocator + Clone
 
     pub fn downgrade(&mut self) -> WeakPtr<T, A> {
         let rep = unsafe { self.get_rep_mut() };
-        rep.weaks.fetch_add(1, Ordering::Release);
+        // rep.weaks.fetch_add(1, Ordering::Release);
+        rep.weaks.fetch_add(1, Ordering::SeqCst);
         WeakPtr {
             _ptr: self._ptr,
             _rep: self._rep,
@@ -147,8 +160,25 @@ where A: Allocator + Clone
 impl<T, A> SharedPtr<T, A>
 where A: Allocator + Clone
 {
-    pub(crate) fn _debug_get_ptr(&self) -> *const u8 { self._ptr as *const u8 }
-    pub(crate) fn _debug_get_rep(&self) -> *const u8 { self._rep as *const u8 }
+    pub fn _force_set_ptr(&mut self, _ptr: *const T) {
+        unsafe { std::ptr::write(&raw mut self._ptr, _ptr as *mut T) }
+    }
+    pub fn _force_set_rep(&mut self, _rep: *const RefCountObject<T, A>) {
+        unsafe { std::ptr::write(&raw mut self._rep, _rep as *mut RefCountObject<T, A>) }
+    }
+    pub fn _force_get_ptr(&self) -> *const T { self._ptr }
+    pub fn _force_get_rep(&self) -> *const RefCountObject<T, A> { self._rep }
+
+    pub fn _force_set_vtable(&mut self, _vtable: *const u8) {
+        unsafe { self.get_rep_mut()._cpp_vtable = _vtable }
+    }
+}
+
+impl<T, A> SharedPtr<T, A>
+where A: Allocator + Clone
+{
+    pub fn _debug_get_ptr(&self) -> *const u8 { self._ptr as *const u8 }
+    pub fn _debug_get_rep(&self) -> *const u8 { self._rep as *const u8 }
 }
 
 impl<T, A> Clone for SharedPtr<T, A>
@@ -156,7 +186,8 @@ where A: Allocator + Clone
 {
     fn clone(&self) -> Self {
         let rep = unsafe { &mut *self._rep };
-        rep.uses.fetch_add(1, Ordering::Release);
+        // rep.uses.fetch_add(1, Ordering::Release);
+        rep.uses.fetch_add(1, Ordering::SeqCst);
         Self {
             _ptr: self._ptr,
             _rep: self._rep,
@@ -171,12 +202,16 @@ where A: Allocator + Clone
     fn drop(&mut self) {
         unsafe {
             let rep = self.get_rep_mut();
-            let old = rep.uses.fetch_sub(1, Ordering::Release);
+            // let old = rep.uses.fetch_sub(1, Ordering::Release);
+            let old = rep.uses.fetch_sub(1, Ordering::SeqCst);
             if old == 1 {
                 // keep the allocation alive, but it's semantically dropped
-                let weaks = rep.weaks.fetch_sub(1, Ordering::Release);
+                // let weaks = rep.weaks.fetch_sub(1, Ordering::Release);
+                let weaks = rep.weaks.fetch_sub(1, Ordering::SeqCst);
                 if weaks == 1 { // now it's safe to actually drop it
-                    std::ptr::drop_in_place(self._rep) 
+                    std::ptr::drop_in_place(self._rep);
+                    self._alloc.deallocate(NonNull::new_unchecked(
+                        self._rep as *mut u8), RefCountObject::<T, A>::get_layout());
                 }
             }
         }
@@ -253,8 +288,10 @@ where A: Allocator + Clone
         }
     }
 
-    pub fn strong_count(&self) -> usize { unsafe { self.get_rep().uses.load(Ordering::Acquire) as usize } }
-    pub fn weak_count(&self) -> usize { unsafe { self.get_rep().weaks.load(Ordering::Acquire) as usize } }
+    // pub fn strong_count(&self) -> usize { unsafe { self.get_rep().uses.load(Ordering::Acquire) as usize } }
+    // pub fn weak_count(&self) -> usize { unsafe { self.get_rep().weaks.load(Ordering::Acquire) as usize } }
+    pub fn strong_count(&self) -> usize { unsafe { self.get_rep().uses.load(Ordering::SeqCst) as usize } }
+    pub fn weak_count(&self) -> usize { unsafe { self.get_rep().weaks.load(Ordering::SeqCst) as usize } }
 
     pub fn as_ptr(&self) -> *const Self { &raw const *self }
     pub fn as_ptr_mut(&mut self) -> *mut Self { &raw mut *self }
@@ -270,8 +307,21 @@ where A: Allocator + Clone
 impl<T, A> WeakPtr<T, A>
 where A: Allocator + Clone
 {
-    pub(crate) fn _debug_get_ptr(&self) -> *const u8 { self._ptr as *const u8 }
-    pub(crate) fn _debug_get_rep(&self) -> *const u8 { self._rep as *const u8 }
+    pub fn _force_set_ptr(&mut self, _ptr: *const T) {
+        unsafe { std::ptr::write(&raw mut self._ptr, _ptr as *mut T) }
+    }
+    pub fn _force_set_rep(&mut self, _rep: *const RefCountObject<T, A>) {
+        unsafe { std::ptr::write(&raw mut self._rep, _rep as *mut RefCountObject<T, A>) }
+    }
+    pub fn _force_get_ptr(&self) -> *const T { self._ptr }
+    pub fn _force_get_rep(&self) -> *const RefCountObject<T, A> { self._rep }
+}
+
+impl<T, A> WeakPtr<T, A>
+where A: Allocator + Clone
+{
+    pub fn _debug_get_ptr(&self) -> *const u8 { self._ptr as *const u8 }
+    pub fn _debug_get_rep(&self) -> *const u8 { self._rep as *const u8 }
 }
 
 impl<T, A> Drop for WeakPtr<T, A>
@@ -280,10 +330,13 @@ where A: Allocator + Clone
     fn drop(&mut self) {
         unsafe {
             let rep = self.get_rep_mut();
-            let weaks = rep.uses.fetch_sub(1, Ordering::Release);
+            // let weaks = rep.uses.fetch_sub(1, Ordering::Release);
+            let weaks = rep.uses.fetch_sub(1, Ordering::SeqCst);
             // no other SharedPtr/WeakPtr is referencing this, safe to drop
             if self.strong_count() == 0 && weaks == 1 {
-                std::ptr::drop_in_place(self._rep) 
+                std::ptr::drop_in_place(self._rep);
+                self._alloc.deallocate(NonNull::new_unchecked(
+                    self._rep as *mut u8), RefCountObject::<T, A>::get_layout());
             }
         }
     }

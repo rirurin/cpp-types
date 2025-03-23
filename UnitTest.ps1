@@ -1,5 +1,6 @@
 param (
-    [System.Boolean] $IsDebug = $False
+    [System.Boolean] $IsDebug = $False,
+    [System.Boolean] $ShowPrintf = $False
 )
 
 [System.Boolean] $global:is_pushed = $False
@@ -63,7 +64,8 @@ function TestRustCrate {
         [string] $CrateType
     )
     $Profile = if ($IsDebug) { "--profile=release-debug" } else { "--profile=release" }
-    cargo +nightly test $Profile -Z build-std=$BuildStd -Z build-std-features=$BuildStdFeatures
+    $NoCapture = if ($ShowPrintf) { "--nocapture" } else { "" }
+    cargo +nightly test $Profile -Z build-std=$BuildStd -Z build-std-features=$BuildStdFeatures -- $NoCapture
     # if (!$?) {
     #     Write-Error "Tests failed for ${FriendlyName}"
     # }
