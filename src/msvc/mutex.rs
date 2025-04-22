@@ -119,6 +119,9 @@ impl Mutex {
         self.thread_id = unsafe { GetCurrentThreadId() };
         self.count += 1;
     }
+    pub fn get_count(&mut self) -> usize {
+        self.count as usize
+    }
 }
 
 unsafe impl Send for Mutex {}

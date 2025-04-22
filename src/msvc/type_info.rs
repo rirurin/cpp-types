@@ -1,7 +1,7 @@
 use std::{
     ffi::{ c_char, CStr },
     fmt::Debug,
-    hash::{ Hash, Hasher }
+    hash::{ Hash, Hasher },
 };
 
 #[repr(C)]
@@ -41,5 +41,18 @@ impl Hash for TypeInfo {
     where H: Hasher
     {
         self.get_decorated_name().as_bytes().iter().for_each(|b| (*b).hash(state))
+    }
+}
+
+#[repr(C)]
+pub struct ObjectLocator {
+    signature: u32,
+    offset: u32,
+    cd_offset: u32,
+    type_info: u32,
+}
+impl ObjectLocator {
+    pub fn get_type_info_offset(&self) -> u32 {
+        self.type_info
     }
 }

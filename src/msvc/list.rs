@@ -579,7 +579,7 @@ where A: Allocator
     fn new_nil(alloc: A) -> *mut Self where Self: Sized;
     fn next(&self, nil: *mut Self) -> Option<&Self> where Self: Sized;
     fn next_mut(&mut self, nil: *mut Self) -> Option<&mut Self> where Self: Sized;
-    fn next_ptr(&mut self, nil: *mut Self) -> Option<NonNull<Self>> where Self: Sized;
+    fn next_ptr(&self, nil: *mut Self) -> Option<NonNull<Self>> where Self: Sized;
     fn value(&self) -> &T;
     fn value_mut(&mut self) -> &mut T;
     fn set_next(&mut self, next: *mut Self, nil: *mut Self) where Self: Sized;
@@ -627,7 +627,7 @@ where A: Allocator + Clone
             false => Some(unsafe{&mut *self.next})
         }
     }
-    fn next_ptr(&mut self, nil: *mut Self) -> Option<NonNull<Self>> where Self: Sized {
+    fn next_ptr(&self, nil: *mut Self) -> Option<NonNull<Self>> where Self: Sized {
         match std::ptr::eq(self.next, nil) {
             true => None,
             false => Some(unsafe{NonNull::new_unchecked(self.next)})

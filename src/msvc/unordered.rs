@@ -112,6 +112,36 @@ where H: Hasher + HasherInit,
     fn iter(&self) -> ListIterator<'_, ListNode<T0, A>, T0, A> { self.into_iter() }
     fn iter_mut(&mut self) -> ListIteratorMut<'_, ListNode<T0, A>, T0, A> { self.into_iter() }
 
+    fn erase(&mut self, key: &T1) {
+        let target = self.find_node_by_key(key);
+        if target.is_none() { return; }
+        let bucket = (H::get_hash(key) as usize) & self.mask;
+        let target = unsafe { &*target.unwrap() };
+        let first = self.buckets[bucket << 1];
+        let last = self.buckets[bucket << 1 + 1];
+        if std::ptr::addr_eq(last, target) {
+            if std::ptr::addr_eq(first, target) {
+                // make bucket empty
+                self.buckets[bucket << 1] = self.list.get_nil();
+                self.buckets[bucket << 1 + 1] = self.list.get_nil();
+            } else {
+                // move end back one element
+                let prev = target.prev_ptr(self.list.get_nil());
+                self.buckets[bucket << 1 + 1] = match prev.map(|v| v.as_ptr()) {
+                    Some(v) => v, None => std::ptr::null_mut()
+                };
+            }
+        } else if std::ptr::addr_eq(first, target) {
+            // move beginning up one element
+            let next = target.next_ptr(self.list.get_nil());
+            let next = match next.map(|v| v.as_ptr()) {
+                Some(v) => v, None => std::ptr::null_mut()
+            };
+            self.buckets[bucket << 1] = next;
+        }
+        unsafe { self.list.remove_unchecked(&raw const *target as *mut ListNode<T0, A>) };
+    }
+
 }
 impl<H, T0, T1, A> HashTable<H, T0, T1, A>
 where H: Hasher + HasherInit,
@@ -127,7 +157,7 @@ where H: Hasher + HasherInit,
         loop {
             // don't allow this, duplicate entries aren't allowed
             if unsafe { (&*curr).value() == value } { return Err(()) }
-            unsafe { if std::ptr::eq(curr, first) { return Ok(Some(&raw const *curr as *mut ListNode<T0, A>))} }
+            if std::ptr::eq(curr, first) { return Ok(Some(&raw const *curr as *mut ListNode<T0, A>))}
             curr = match unsafe { (&*curr).prev(self.list.get_nil()) } {
                 // bucket has an entry and a node to attach onto
                 Some(v) => &raw const *v as *mut ListNode<T0, A>,
@@ -325,6 +355,7 @@ where H: Hasher + HasherInit,
     /// Inserts an element into the container, if the container doesn't already contain an 
     /// element with an equivalent key. This returns a bool that notes if the insertion took place
     pub fn insert(&mut self, value: T) -> bool { self._impl.insert(value) }
+    pub fn erase(&mut self, val: &T) { self._impl.erase(val) }
 }
 
 impl<'a, H, T, A> IntoIterator for &'a Set<H, T, A>
@@ -463,6 +494,7 @@ where H: Hasher + HasherInit,
         self._impl.find_mut(key)
     }
     pub fn contains(&self, key: &K) -> bool { self._impl.contains(key) }
+    pub fn erase(&mut self, val: &K) { self._impl.erase(val) }
 }
 
 impl<'a, H, K, V, A> IntoIterator for &'a Map<H, K, V, A>

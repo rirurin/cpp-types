@@ -40,6 +40,7 @@ pub enum NodeDirection {
     Right
 }
 
+#[repr(C)]
 pub struct TreeNode<T, A = Global>
 where T: PartialEq + PartialOrd,
       A: Allocator + Clone
@@ -686,6 +687,10 @@ where C: TreeCompare<MapPair<K, V>, K>,
     }
     pub fn find_mut(&mut self, value: K) -> Option<&mut V> { 
         self._impl.find_mut(value).map(|v| v.get_value_mut())
+    }
+
+    pub fn iter(&self) -> TreeIterator<MapPair<K, V>, A> {
+        self._impl.into_iter()
     }
 }
 

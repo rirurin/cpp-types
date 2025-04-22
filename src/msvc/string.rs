@@ -2,6 +2,7 @@
 use allocator_api2::alloc::{ Allocator, Global };
 use std::{
     alloc::Layout,
+    cmp::Ordering,
     fmt::{ Debug, Display },
     hash::{ Hash, Hasher },
     mem::size_of,
@@ -117,12 +118,23 @@ where T: CharBehavior + PartialEq,
 impl<A> String<u8, A>
 where A: Allocator + Clone + Clone
 {
+    // NOTE: std::string does use a null terminator (I can't read), will need to update string API for this
     pub fn from_str_in(text: &str, alloc: A) -> Self {
         let mut new = Self::new_in(alloc);
         new.resize(text.len());
         // string slice is already UTF-8, so just memcpy it
         unsafe { std::ptr::copy_nonoverlapping(text.as_ptr(), new.get_ptr_mut(), text.len()); }
         new.size = text.len();
+        new
+    }
+
+    pub fn from_str_in_null_term(text: &str, alloc: A) -> Self {
+        let mut new = Self::new_in(alloc);
+        new.resize(text.len() + 1);
+        // string slice is already UTF-8, so just memcpy it
+        unsafe { std::ptr::copy_nonoverlapping(text.as_ptr(), new.get_ptr_mut(), text.len()); }
+        unsafe { *new.get_ptr_mut().add(text.len()) = 0; }
+        new.size = text.len() + 1; // include null terminator
         new
     }
 
@@ -183,6 +195,16 @@ where T: CharBehavior + PartialEq,
         true
     }
 }
+
+impl<T, A> PartialOrd for String<T, A>
+where T: CharBehavior + PartialOrd,
+      A: Allocator + Clone
+{
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.as_bytes().partial_cmp(other.as_bytes())
+    }
+}
+
 impl<A> From<&String<u8, A>> for &str
 where A: Allocator + Clone
 {
