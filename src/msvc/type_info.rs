@@ -55,4 +55,7 @@ impl ObjectLocator {
     pub fn get_type_info_offset(&self) -> u32 {
         self.type_info
     }
+    pub fn get_struct_offset(&self) -> u32 {
+        self.offset
+    }
 }
