@@ -48,6 +48,38 @@ impl Hasher for FNV1ARTTI {
     fn finish(&self) -> u64 { self.0 ^ self.0 >> 0x20 }
 }
 
+pub struct NoHashU32;
+
+impl HasherInit for NoHashU32 {
+    fn new() -> Self { Self }
+    // assume that H is u32 or a type with an equivalent memory layout
+    fn get_hash<H>(value: &H) -> u64 where H: Hash {
+        let _ = Self::new();
+        unsafe { *(&raw const *value as *const u32) as u64 }
+    }
+}
+
+impl Hasher for NoHashU32 {
+    fn write(&mut self, _: &[u8]) {}
+    fn finish(&self) -> u64 { 0 }
+}
+
+pub struct NoHashU64;
+
+impl HasherInit for NoHashU64 {
+    fn new() -> Self { Self }
+    // assume that H is u64 or a type with an equivalent memory layout
+    fn get_hash<H>(value: &H) -> u64 where H: Hash {
+        let _ = Self::new();
+        unsafe { *(&raw const *value as *const u64) }
+    }
+}
+
+impl Hasher for NoHashU64 {
+    fn write(&mut self, _: &[u8]) {}
+    fn finish(&self) -> u64 { 0 }
+}
+
 #[cfg(test)]
 pub mod tests {
     use crate::msvc::string::String;
