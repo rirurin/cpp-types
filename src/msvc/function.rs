@@ -34,4 +34,5 @@ impl<T, P> FunctionImpl<T, P> {
             None
         }
     }
+    pub fn get_value(&self) -> *mut T { self.value }
 }
