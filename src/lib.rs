@@ -6,6 +6,7 @@ pub mod msvc {
     pub mod hash;
     pub mod list;
     pub mod mutex;
+    pub mod optional;
     pub mod shared_ptr;
     pub mod tree;
     pub mod string;
