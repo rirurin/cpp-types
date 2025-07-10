@@ -354,7 +354,7 @@ where C: TreeCompare<T0, T1>,
     // MapValue), but find based on MapKey which is PartialEq<MapNode>
     pub fn remove(&mut self, value: T1) -> bool
     {
-        let target = match self.find_mut(value) {
+        let _target = match self.find_mut(value) {
             Some(v) => v,
             None => return false
         };

@@ -3,9 +3,9 @@ use allocator_api2::alloc::{ Allocator, Global };
 use std::{
     alloc::Layout,
     fmt::Display,
-    iter::IntoIterator,
+    iter::{ Extend, IntoIterator },
     mem::ManuallyDrop,
-    ops::{ Index, IndexMut },
+    ops::{ Index, IndexMut, Range },
     ptr::NonNull,
     slice::{ Iter, IterMut }
 };
@@ -91,6 +91,21 @@ where A: Allocator
         } else {
             None
         }
+    }
+    pub fn extend_from_slice(&mut self, slice: &[T]) {
+        self.reserve(self.len() + slice.len());
+        unsafe { 
+            std::ptr::copy_nonoverlapping(slice.as_ptr(), self.last, slice.len());
+            self.last = self.last.add(slice.len());
+        }
+    }
+    pub fn extend_from_within(&mut self, range: Range<usize>) -> bool {
+        // SAFETY: Range is bounds checked so start < end and end < self.len()
+        // The slice created won't overlap with the new area in extend_from_slice
+        if range.end > range.start || range.end >= self.len() { return false; }
+        let elem = unsafe { std::slice::from_raw_parts(self.first.add(range.start), range.end - range.start) };
+        self.extend_from_slice(elem);
+        true
     }
 
     pub fn as_slice(&self) -> &[T] {
@@ -423,6 +438,14 @@ where T: Display,
         }
         buf.push_str(" ]");
         write!(f, "{}", &buf)
+    }
+}
+
+impl<T, A> Extend<T> for Vector<T, A>
+where A: Allocator
+{
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        for elem in iter { self.push(elem) }
     }
 }
 
