@@ -1,6 +1,6 @@
 [package]
 name = "cpp-types"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -12,6 +12,12 @@ features = [
     "Win32_Foundation",
     "Win32_System_Threading"
 ]
+
+[features]
+default = ["clang", "gcc", "msvc"]
+clang = []
+gcc = []
+msvc = []
 
 # Optimized Release Build
 [profile.release]

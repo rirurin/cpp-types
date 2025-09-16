@@ -1,6 +1,18 @@
+#[cfg(feature = "clang")]
+pub mod clang {
+    pub mod string;
+    pub mod vector;
+}
+#[cfg(feature = "gcc")]
+pub mod gcc {
+    pub mod string;
+    pub mod vector;
+}
 pub mod generic {
     pub mod string;
+    pub mod vector;
 }
+#[cfg(feature = "msvc")]
 pub mod msvc {
     pub mod function;
     pub mod hash;
