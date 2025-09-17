@@ -689,7 +689,7 @@ where C: TreeCompare<MapPair<K, V>, K>,
         self._impl.find_mut(value).map(|v| v.get_value_mut())
     }
 
-    pub fn iter(&self) -> TreeIterator<MapPair<K, V>, A> {
+    pub fn iter(&self) -> TreeIterator<'_, MapPair<K, V>, A> {
         self._impl.into_iter()
     }
 }

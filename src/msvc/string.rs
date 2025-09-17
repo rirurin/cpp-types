@@ -1,33 +1,53 @@
+//! Rust reimplementation of Visual C++'s std::string implementation
+
 #![allow(dead_code, unused_imports)]
 use allocator_api2::alloc::{ Allocator, Global };
+use crate::generic::string::CharBehavior;
 use std::{
     alloc::Layout,
     cmp::Ordering,
     fmt::{ Debug, Display },
     hash::{ Hash, Hasher },
+    marker::PhantomData,
     mem::size_of,
     ptr::NonNull,
     string::String as RustString
 };
-
+use std::mem::MaybeUninit;
 // See https://devblogs.microsoft.com/oldnewthing/20230803-00/?p=108532
 
 const MAX_STORAGE_SIZE: usize = 0x10;
 
-pub trait CharBehavior { }
-impl CharBehavior for u8 { } // std::string
-impl CharBehavior for u16 { } // std::wstring
+#[repr(C)]
+pub union StringStorage<T: CharBehavior > {
+    buf: MaybeUninit<[u8; MAX_STORAGE_SIZE]>, // _Buf
+    ptr: NonNull<T>, // _Ptr
+}
+
+impl<T: CharBehavior > StringStorage<T> {
+    fn new() -> Self {
+        Self {
+            buf: MaybeUninit::uninit()
+        }
+    }
+    fn get_buf(&self) -> *mut T {
+        unsafe { self.buf.as_ptr() as *mut _ }
+    }
+    fn get_ptr(&self) -> *mut T {
+        unsafe { self.ptr.as_ptr() }
+    }
+}
 
 #[repr(C)]
 pub struct String<T = u8, A = Global>
-where T: CharBehavior + PartialEq,
+where T: CharBehavior  + PartialEq,
       A: Allocator + Clone
 {
-    storage: [u8; MAX_STORAGE_SIZE],
-    size: usize,
-    capacity: usize,
+    storage: StringStorage<T>, // _Bx
+    size: usize, // _Mysize
+    capacity: usize, // _Myres
     _allocator: A,
-    _char_type: std::marker::PhantomData<T>
+    _char_type: PhantomData<T>
 }
 
 impl String<u8, Global> {
@@ -53,96 +73,141 @@ where A: Allocator + Clone
 }
 
 impl<T, A> String<T, A>
-where T: CharBehavior + PartialEq,
+where T: CharBehavior  + PartialEq,
       A: Allocator + Clone
 {
     pub fn new_in(alloc: A) -> Self {
-        assert!(std::mem::size_of::<A>() == 0, "Allocator must be zero-sized!");
+        assert_eq!(size_of::<A>(), 0, "Allocator must be zero-sized!");
         Self {
-            storage: [0; MAX_STORAGE_SIZE],
+            storage: StringStorage::new(),
             size: 0,
-            capacity: MAX_STORAGE_SIZE / std::mem::size_of::<T>(),
+            capacity: (MAX_STORAGE_SIZE / size_of::<T>() - 1),
             _allocator: alloc,
-            _char_type: std::marker::PhantomData
+            _char_type: PhantomData
         }
     }
+
     fn get_ptr(&self) -> *const T {
-        if self.is_inline() { &raw const self.storage as *const T } else { unsafe { *(&raw const self.storage as *const *const T) } }
+        match self.is_inline() {
+            true => self.storage.get_buf(),
+            false => self.storage.get_ptr()
+        }
     }
+
     fn get_ptr_mut(&mut self) -> *mut T {
-        if self.is_inline() { &raw mut self.storage as *mut T } else { unsafe { *(&raw mut self.storage as *mut *mut T) } }
+        self.get_ptr() as *mut _
     }
-    fn get_small_ptr(&self) -> *const T { &raw const self.storage as *const T }
-    fn get_small_ptr_mut(&mut self) -> *mut T { &raw mut self.storage as *mut T }
-    unsafe fn get_large_ptr(&self) -> *const T { *(&raw const self.storage as *const *const T) }
-    unsafe fn get_large_ptr_mut(&mut self) -> *mut T { *(&raw mut self.storage as *mut *mut T) }
-    unsafe fn get_large_ptr_ptr_mut(&mut self) -> *mut *mut T { &raw mut self.storage as *mut *mut T }
+
+    fn get_real_capacity(&self) -> usize {
+        self.capacity + 1
+    }
+
     unsafe fn get_layout(&self) -> Layout { 
         Layout::from_size_align_unchecked(
-            std::mem::size_of::<T>() * self.capacity, 
-            std::mem::align_of::<T>()
+            size_of::<T>() * self.get_real_capacity(),
+            align_of::<T>()
         )
     }
-    fn is_inline(&self) -> bool { self.capacity <= MAX_STORAGE_SIZE / std::mem::size_of::<T>() }
-    fn can_inline(n: usize) -> bool { n <= MAX_STORAGE_SIZE / std::mem::size_of::<T>() }
-    fn drop_inner(&mut self) { 
-        let ptr = unsafe { NonNull::new_unchecked(self.get_large_ptr_mut() as *mut u8) };
+
+    fn is_inline(&self) -> bool { self.capacity < MAX_STORAGE_SIZE / size_of::<T>() }
+
+    fn can_inline(n: usize) -> bool { n < MAX_STORAGE_SIZE / size_of::<T>() }
+
+    fn drop_inner(&mut self) {
+        let ptr = unsafe { NonNull::new_unchecked(self.storage.get_ptr() as *mut u8) };
         unsafe { self._allocator.deallocate(ptr, self.get_layout()); }
     }
+
+    fn get_new_capacity(&self) -> usize {
+        Self::get_new_capacity_static(self.get_real_capacity())
+    }
+
+    fn get_new_capacity_static(value: usize) -> usize {
+        match value <= MAX_STORAGE_SIZE {
+            true => value * 2,
+            false => (value as f32 * 1.5) as usize
+        }
+    }
+
     fn resize(&mut self, new: usize) {
         // Get pointer to old allocation
         let old = self.get_ptr();
         let was_inline = self.is_inline();
-        let to_copy = if new > self.capacity { self.capacity } else { new };
-        self.capacity = if Self::can_inline(new) { MAX_STORAGE_SIZE } else { new };
+        // let to_copy = self.capacity.min(new);
+        self.capacity = if Self::can_inline(new) { MAX_STORAGE_SIZE - 1 } else { new };
         // Point to new allocation and copy old info
         unsafe {
-            if self.is_inline() {
-                if self.size > 0 { std::ptr::copy(old, self.get_small_ptr_mut(), to_copy); }
-            } else {
-                let new = self._allocator.allocate(self.get_layout()).unwrap().as_ptr() as *mut T;
-                if self.size > 0 {
-                    std::ptr::copy_nonoverlapping(old, new, to_copy);
-                    if !was_inline { self.drop_inner() }
+            // copy self.size + 1 elements (include null terminator)
+            match self.is_inline() {
+                true => if self.size > 0 { std::ptr::copy(old, self.storage.get_buf(), self.size + 1); },
+                false => {
+                    let new = self._allocator.allocate(self.get_layout()).unwrap().as_ptr() as *mut T;
+                    if self.size > 0 {
+                        std::ptr::copy_nonoverlapping(old, new, self.size + 1);
+                        if !was_inline { self.drop_inner() }
+                    }
+                    self.storage.ptr = NonNull::new_unchecked(new);
                 }
-                std::ptr::write(self.get_large_ptr_ptr_mut(), new);
             }
         }
     }
     pub fn clear(&mut self) { self.size = 0; }
-    pub fn as_bytes(&self) -> &[u8] { unsafe { std::slice::from_raw_parts(self.get_ptr() as *const u8, self.size * std::mem::size_of::<T>()) } }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(self.get_ptr() as *const u8, self.size * size_of::<T>())
+        }
+    }
+
     pub fn len(&self) -> usize { self.size }
+
     pub fn capacity(&self) -> usize { self.capacity }
+
+    fn grow_capacity(&mut self, new_len: usize) {
+        if new_len > self.get_real_capacity() { // grow by a factor of 1.5
+            let mut new_cap = self.get_new_capacity();
+            while new_cap < new_len {
+                new_cap = Self::get_new_capacity_static(new_cap);
+            }
+            self.resize(new_cap - 1);
+        }
+    }
 }
 
 impl<A> String<u8, A>
-where A: Allocator + Clone + Clone
+where A: Allocator + Clone
 {
-    // NOTE: std::string does use a null terminator (I can't read), will need to update string API for this
     pub fn from_str_in(text: &str, alloc: A) -> Self {
         let mut new = Self::new_in(alloc);
-        new.resize(text.len());
+        let has_null_term = text.as_bytes().last().map_or(false, |c| *c == 0);
+        let new_size = text.len() + (1 * Into::<usize>::into(has_null_term));
+        let new_cap = ((new_size + (MAX_STORAGE_SIZE - 1)) & !(MAX_STORAGE_SIZE - 1)) - 1;
+        new.resize(new_cap);
         // string slice is already UTF-8, so just memcpy it
         unsafe { std::ptr::copy_nonoverlapping(text.as_ptr(), new.get_ptr_mut(), text.len()); }
-        new.size = text.len();
+        // add the null terminator if needed
+        new.size = new_size;
+        if !has_null_term {
+            unsafe { *new.get_ptr_mut().add(new_size) = 0 };
+        }
         new
     }
 
+    #[deprecated(since = "0.2.0", note = "from_str_in now adds a null terminator to a Rust string if required. Use that instead")]
     pub fn from_str_in_null_term(text: &str, alloc: A) -> Self {
-        let mut new = Self::new_in(alloc);
-        new.resize(text.len() + 1);
-        // string slice is already UTF-8, so just memcpy it
-        unsafe { std::ptr::copy_nonoverlapping(text.as_ptr(), new.get_ptr_mut(), text.len()); }
-        unsafe { *new.get_ptr_mut().add(text.len()) = 0; }
-        new.size = text.len() + 1; // include null terminator
-        new
+        Self::from_str_in(text, alloc)
     }
 
     pub fn push_str(&mut self, str: &str) {
-        if self.len() + str.len() > self.capacity() { // round to nearest power of 2
-            self.resize(1 << usize::BITS - (self.len() + str.len()).leading_zeros());
-        }
+        // remove null terminator from string to push
+        let str = str.strip_suffix("\0").unwrap_or(str);
+        let has_null_term = self.as_bytes().last().map_or(false, |c| *c == 0);
+        let new_len = self.len() + str.len() + (1 * Into::<usize>::into(has_null_term));
+        self.grow_capacity(new_len);
         unsafe { std::ptr::copy_nonoverlapping(str.as_ptr(), self.get_ptr_mut().add(self.len()), str.len()); }
+        if !has_null_term {
+            unsafe { *self.get_ptr_mut().add(new_len) = 0 };
+        }
         self.size += str.len();
     }
 }
@@ -152,35 +217,48 @@ where A: Allocator + Clone
 {
     pub fn from_str_in_wide(text: &str, alloc: A) -> Self {
         let mut new = Self::new_in(alloc);
-        new.resize(text.len());
+        let has_null_term = text.as_bytes().last().map_or(false, |c| *c == 0);
+        let new_size = text.len() + (1 * Into::<usize>::into(has_null_term));
+        let c0 = (MAX_STORAGE_SIZE / size_of::<u16>()) - 1;
+        let new_cap = ((new_size + c0) & !c0) - 1;
+        new.resize(new_cap);
         let utf16: Vec<u16> = text.encode_utf16().collect(); // convert UTF-8 => UTF-16
         unsafe { std::ptr::copy_nonoverlapping(utf16.as_ptr(), new.get_ptr_mut(), utf16.len()); }
-        new.size = text.len();
+        new.size = new_size;
+        if !has_null_term {
+            unsafe { *new.get_ptr_mut().add(new_size) = 0 };
+        }
         new
     }
+
     pub fn push_str(&mut self, str: &str) {
-        if self.len() + str.len() > self.capacity() { // round to nearest power of 2
-            self.resize(1 << usize::BITS - (self.len() + str.len()).leading_zeros());
-        }
+        // remove null terminator from string to push
+        let str = str.strip_suffix("\0").unwrap_or(str);
+        let has_null_term = self.as_bytes().last().map_or(false, |c| *c == 0);
+        let new_len = self.len() + str.len() + (1 * Into::<usize>::into(has_null_term));
+        self.grow_capacity(new_len);
         let utf16: Vec<u16> = str.encode_utf16().collect(); // convert UTF-8 => UTF-16
-        unsafe { std::ptr::copy_nonoverlapping(utf16.as_ptr(), self.get_ptr_mut(), utf16.len()); }
+        unsafe { std::ptr::copy_nonoverlapping(utf16.as_ptr(), self.get_ptr_mut().add(self.len()), utf16.len()); }
+        if !has_null_term {
+            unsafe { *self.get_ptr_mut().add(new_len) = 0 };
+        }
         self.size += str.len();
     }
 }
 
 impl<T, A> Drop for String<T, A>
-where T: CharBehavior + PartialEq,
+where T: CharBehavior  + PartialEq,
       A: Allocator + Clone
 {
     fn drop(&mut self) {
         if !self.is_inline() { self.drop_inner() }
         self.size = 0;
-        self.capacity = MAX_STORAGE_SIZE / std::mem::size_of::<T>();
+        self.capacity = MAX_STORAGE_SIZE / size_of::<T>();
     }
 }
 
 impl<T, A> PartialEq for String<T, A>
-where T: CharBehavior + PartialEq,
+where T: CharBehavior  + PartialEq,
       A: Allocator + Clone
 {
     fn eq(&self, other: &Self) -> bool {
@@ -197,7 +275,7 @@ where T: CharBehavior + PartialEq,
 }
 
 impl<T, A> PartialOrd for String<T, A>
-where T: CharBehavior + PartialOrd,
+where T: CharBehavior  + PartialEq,
       A: Allocator + Clone
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -276,7 +354,7 @@ where A: Allocator + Clone
 }
 
 impl<T, A> Hash for String<T, A>
-where T: CharBehavior + PartialEq,
+where T: CharBehavior  + PartialEq,
       A: Allocator + Clone
 {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -285,7 +363,7 @@ where T: CharBehavior + PartialEq,
 }
 
 impl<T, A> Clone for String<T, A>
-where T: CharBehavior + PartialEq,
+where T: CharBehavior  + PartialEq,
       A: Allocator + Clone
 {
     fn clone(&self) -> Self {
@@ -294,12 +372,12 @@ where T: CharBehavior + PartialEq,
         } else {
             // make new allocation
             unsafe {
-                let mut out = [0; MAX_STORAGE_SIZE];
+                let mut out = StringStorage::new();
                 let new = self._allocator.allocate(self.get_layout()).unwrap().as_ptr() as *mut T;
                 if self.size > 0 {
                     std::ptr::copy_nonoverlapping(self.get_ptr(), new, self.capacity);
                 }
-                std::ptr::write(out.as_mut_ptr() as *mut *mut T, new);
+                out.ptr = NonNull::new_unchecked(new);
                 out
             } 
         };
@@ -308,16 +386,22 @@ where T: CharBehavior + PartialEq,
             size: self.size,
             capacity: self.capacity,
             _allocator: self._allocator.clone(),
-            _char_type: std::marker::PhantomData
+            _char_type: PhantomData
         }
     }
 }
 
 #[cfg(test)]
 pub mod tests {
-    use super::String;
-    use std::string::String as RustString;
-    use std::error::Error;
+    use allocator_api2::alloc::Global;
+    use std::{
+        error::Error,
+        string::String as RustString
+    };
+    use crate::{
+        generic::string::CharBehavior,
+        msvc::string::String
+    };
 
     type TestReturn = Result<(), Box<dyn Error>>;
 
@@ -325,9 +409,9 @@ pub mod tests {
     pub fn create_new_blank_string() -> TestReturn {
         let s = String::new();
         let s_str: &str = (&s).into();
-        assert!(s_str == "", "String should be blank");
-        assert!(s.len() == 0, "Length should be zero");
-        assert!(s.capacity() == 16, "Capacity should be equal to storage size");
+        assert_eq!("", s_str, "String should be blank");
+        assert_eq!(0, s.len(), "Length of empty string should be zero");
+        assert_eq!(15, s.capacity(), "Capacity of empty string should be equal to storage size (excluding null terminator)");
         Ok(())
     }
 
@@ -336,9 +420,9 @@ pub mod tests {
         // 45 characters, including null terminator
         let s = String::from_str("Even if there is some monster behind this...");
         let s_str: &str = (&s).into();
-        assert!(s_str == "Even if there is some monster behind this...", "Text doesn't match");
-        assert!(s.len() == 44, "Length should be 44");
-        assert!(s.capacity() == 44, "Capacity should be equal to allocation size");
+        assert_eq!(s_str, "Even if there is some monster behind this...", "Text doesn't match");
+        assert_eq!(s.len(), 44, "Length should be 44");
+        assert_eq!(s.capacity(), 47, "Capacity should be equal to allocation size");
         Ok(())
     }
 
@@ -347,16 +431,16 @@ pub mod tests {
         // 8 characters, including null terminator
         let s = String::from_str("True...");
         let s_str: &str = (&s).into();
-        assert!(s_str == "True...", "Text doesn't match");
-        assert!(s.len() == 7, "Length should be 7");
-        assert!(s.capacity() == 16, "Capacity should be equal to storage size");
+        assert_eq!(s_str, "True...", "Text doesn't match");
+        assert_eq!(s.len(), 7, "Length should be 7");
+        assert_eq!(s.capacity(), 15, "Capacity should be equal to storage size");
         Ok(())
     }
 
     #[test]
     pub fn check_string_as_bytes() -> TestReturn {
         let s = String::from_str("True...");
-        assert!(s.as_bytes() == [0x54, 0x72, 0x75, 0x65, 0x2E, 0x2E, 0x2E],
+        assert_eq!(s.as_bytes(), [0x54, 0x72, 0x75, 0x65, 0x2E, 0x2E, 0x2E],
         "Byte representation doesn't match");
         Ok(())
     }
@@ -364,30 +448,56 @@ pub mod tests {
     #[test]
     pub fn create_mutable_string() -> TestReturn {
         let mut s = String::from_str("GALLICA!");
-        assert!(s.len() == 8, "Length should be 8");
+        assert_eq!(s.len(), 8, "Length should be 8");
+        assert_eq!(s.capacity(), 15, "Capacity should be 15");
         // short push, stays inline
         s.push_str(" THE");
-        assert!(s.len() == 12, "Length should be 12");
+        assert_eq!(s.len(), 12, "Length should be 12");
+        assert_eq!(s.capacity(), 15, "Capacity should be 15");
         // large push, move to allocation
         s.push_str(" SOUND OF YOUR WINGS KEEPS ME UP AT NIGHT!");
-        assert!(s.len() == 54, "Length should be 54");
-        assert!(s.as_bytes() == [ 0x47, 0x41, 0x4C, 0x4C, 0x49, 0x43, 0x41, 0x21, 0x20, 0x54, 0x48, 0x45, 0x20, 0x53, 0x4F, 0x55,
+        assert_eq!(s.len(), 54, "Length should be 54");
+        assert_eq!(s.capacity(), 71, "Capacity should be 71");
+        assert_eq!(s.as_bytes(), [ 0x47, 0x41, 0x4C, 0x4C, 0x49, 0x43, 0x41, 0x21, 0x20, 0x54, 0x48, 0x45, 0x20, 0x53, 0x4F, 0x55,
 0x4E, 0x44, 0x20, 0x4F, 0x46, 0x20, 0x59, 0x4F, 0x55, 0x52, 0x20, 0x57, 0x49, 0x4E, 0x47, 0x53,
 0x20, 0x4B, 0x45, 0x45, 0x50, 0x53, 0x20, 0x4D, 0x45, 0x20, 0x55, 0x50, 0x20, 0x41, 0x54, 0x20,
 0x4E, 0x49, 0x47, 0x48, 0x54, 0x21], "Bytes don't match");
         s.clear();
-        assert!(s.len() == 0, "Length should be zero");
-        assert!(s.as_bytes() == [], "Bytes don't match");
+        assert_eq!(s.len(), 0, "Length should be zero");
+        assert_eq!(s.as_bytes(), [], "Bytes don't match");
         Ok(())
     }
 
     #[test]
+    pub fn create_mutable_string_wide() -> TestReturn {
+        let mut s = String::<u16, _>::from_str_wide("GALLICA!");
+        assert_eq!(s.len(), 8, "Length should be 8");
+        assert_eq!(s.capacity(), 15, "Capacity should be 15");
+        // short push, stays inline
+        s.push_str(" THE");
+        assert_eq!(s.len(), 12, "Length should be 12");
+        assert_eq!(s.capacity(), 15, "Capacity should be 15");
+        // large push, move to allocation
+        s.push_str(" SOUND OF YOUR WINGS KEEPS ME UP AT NIGHT!");
+        assert_eq!(s.len(), 54, "Length should be 54");
+        assert_eq!(s.capacity(), 71, "Capacity should be 71");
+        assert_eq!(s.as_bytes(), [0x47, 0x0, 0x41, 0x0, 0x4c, 0x0, 0x4c, 0x0, 0x49, 0x0, 0x43, 0x0, 0x41, 0x0, 0x21, 0x0, 0x20, 0x0, 0x54,
+            0x0, 0x48, 0x0, 0x45, 0x0, 0x20, 0x0, 0x53, 0x0, 0x4f, 0x0, 0x55, 0x0, 0x4e, 0x0, 0x44, 0x0, 0x20, 0x0, 0x4f, 0x0, 0x46, 0x0,
+            0x20, 0x0, 0x59, 0x0, 0x4f, 0x0, 0x55, 0x0, 0x52, 0x0, 0x20, 0x0, 0x57, 0x0, 0x49, 0x0, 0x4e, 0x0, 0x47, 0x0, 0x53, 0x0, 0x20,
+            0x0, 0x4b, 0x0, 0x45, 0x0, 0x45, 0x0, 0x50, 0x0, 0x53, 0x0, 0x20, 0x0, 0x4d, 0x0, 0x45, 0x0, 0x20, 0x0, 0x55, 0x0, 0x50, 0x0,
+            0x20, 0x0, 0x41, 0x0, 0x54, 0x0, 0x20, 0x0, 0x4e, 0x0, 0x49, 0x0, 0x47, 0x0, 0x48, 0x0, 0x54, 0x0, 0x21, 0x0], "Bytes don't match");
+        s.clear();
+        assert_eq!(s.len(), 0, "Length should be zero");
+        assert_eq!(s.as_bytes(), [], "Bytes don't match");
+        Ok(())
+    }
+    #[test]
     pub fn string_compare() -> TestReturn {
         let s0 = String::from_str("True...");
         let s1 = s0.clone();
-        assert!(s0 == s1, "String s0 (True...) should equal s1 (also True...)");
+        assert_eq!(s0, s1, "String s0 (True...) should equal s1 (also True...)");
         let s2 = String::from_str("False!");
-        assert!(s0 != s2, "String s0 (True...) should not equal s2 (False!)");
+        assert_ne!(s0, s2, "String s0 (True...) should not equal s2 (False!)");
         Ok(())
     }
 }
