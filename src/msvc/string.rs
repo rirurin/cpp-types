@@ -1,3 +1,5 @@
+//! Rust reimplementation of Visual C++'s std::string implementation
+
 #![allow(dead_code, unused_imports)]
 use allocator_api2::alloc::{ Allocator, Global };
 use crate::generic::string::CharBehavior;
@@ -17,12 +19,12 @@ use std::mem::MaybeUninit;
 const MAX_STORAGE_SIZE: usize = 0x10;
 
 #[repr(C)]
-pub union StringStorage<T: CharBehavior> {
+pub union StringStorage<T: CharBehavior > {
     buf: MaybeUninit<[u8; MAX_STORAGE_SIZE]>, // _Buf
     ptr: NonNull<T>, // _Ptr
 }
 
-impl<T: CharBehavior> StringStorage<T> {
+impl<T: CharBehavior > StringStorage<T> {
     fn new() -> Self {
         Self {
             buf: MaybeUninit::uninit()
@@ -38,7 +40,7 @@ impl<T: CharBehavior> StringStorage<T> {
 
 #[repr(C)]
 pub struct String<T = u8, A = Global>
-where T: CharBehavior + PartialEq,
+where T: CharBehavior  + PartialEq,
       A: Allocator + Clone
 {
     storage: StringStorage<T>, // _Bx
@@ -71,7 +73,7 @@ where A: Allocator + Clone
 }
 
 impl<T, A> String<T, A>
-where T: CharBehavior + PartialEq,
+where T: CharBehavior  + PartialEq,
       A: Allocator + Clone
 {
     pub fn new_in(alloc: A) -> Self {
@@ -131,19 +133,20 @@ where T: CharBehavior + PartialEq,
         // Get pointer to old allocation
         let old = self.get_ptr();
         let was_inline = self.is_inline();
-        let to_copy = self.capacity.min(new);
+        // let to_copy = self.capacity.min(new);
         self.capacity = if Self::can_inline(new) { MAX_STORAGE_SIZE - 1 } else { new };
         // Point to new allocation and copy old info
         unsafe {
+            // copy self.size + 1 elements (include null terminator)
             match self.is_inline() {
-                true => if self.size > 0 { std::ptr::copy(old, self.storage.get_buf(), to_copy); },
+                true => if self.size > 0 { std::ptr::copy(old, self.storage.get_buf(), self.size + 1); },
                 false => {
                     let new = self._allocator.allocate(self.get_layout()).unwrap().as_ptr() as *mut T;
                     if self.size > 0 {
-                        std::ptr::copy_nonoverlapping(old, new, to_copy);
+                        std::ptr::copy_nonoverlapping(old, new, self.size + 1);
                         if !was_inline { self.drop_inner() }
                     }
-                    unsafe { self.storage.ptr = NonNull::new_unchecked(new) };
+                    self.storage.ptr = NonNull::new_unchecked(new);
                 }
             }
         }
@@ -159,10 +162,20 @@ where T: CharBehavior + PartialEq,
     pub fn len(&self) -> usize { self.size }
 
     pub fn capacity(&self) -> usize { self.capacity }
+
+    fn grow_capacity(&mut self, new_len: usize) {
+        if new_len > self.get_real_capacity() { // grow by a factor of 1.5
+            let mut new_cap = self.get_new_capacity();
+            while new_cap < new_len {
+                new_cap = Self::get_new_capacity_static(new_cap);
+            }
+            self.resize(new_cap - 1);
+        }
+    }
 }
 
 impl<A> String<u8, A>
-where A: Allocator + Clone + Clone
+where A: Allocator + Clone
 {
     pub fn from_str_in(text: &str, alloc: A) -> Self {
         let mut new = Self::new_in(alloc);
@@ -190,13 +203,7 @@ where A: Allocator + Clone + Clone
         let str = str.strip_suffix("\0").unwrap_or(str);
         let has_null_term = self.as_bytes().last().map_or(false, |c| *c == 0);
         let new_len = self.len() + str.len() + (1 * Into::<usize>::into(has_null_term));
-        if new_len > self.get_real_capacity() { // grow by a factor of 1.5
-            let mut new_cap = self.get_new_capacity();
-            while new_cap < new_len {
-                new_cap = Self::get_new_capacity_static(new_cap);
-            }
-            self.resize(new_cap - 1);
-        }
+        self.grow_capacity(new_len);
         unsafe { std::ptr::copy_nonoverlapping(str.as_ptr(), self.get_ptr_mut().add(self.len()), str.len()); }
         if !has_null_term {
             unsafe { *self.get_ptr_mut().add(new_len) = 0 };
@@ -229,13 +236,7 @@ where A: Allocator + Clone
         let str = str.strip_suffix("\0").unwrap_or(str);
         let has_null_term = self.as_bytes().last().map_or(false, |c| *c == 0);
         let new_len = self.len() + str.len() + (1 * Into::<usize>::into(has_null_term));
-        if new_len > self.get_real_capacity() { // grow by a factor of 1.5
-            let mut new_cap = self.get_new_capacity();
-            while new_cap < new_len {
-                new_cap = Self::get_new_capacity_static(new_cap);
-            }
-            self.resize(new_cap - 1);
-        }
+        self.grow_capacity(new_len);
         let utf16: Vec<u16> = str.encode_utf16().collect(); // convert UTF-8 => UTF-16
         unsafe { std::ptr::copy_nonoverlapping(utf16.as_ptr(), self.get_ptr_mut().add(self.len()), utf16.len()); }
         if !has_null_term {
@@ -246,7 +247,7 @@ where A: Allocator + Clone
 }
 
 impl<T, A> Drop for String<T, A>
-where T: CharBehavior + PartialEq,
+where T: CharBehavior  + PartialEq,
       A: Allocator + Clone
 {
     fn drop(&mut self) {
@@ -257,7 +258,7 @@ where T: CharBehavior + PartialEq,
 }
 
 impl<T, A> PartialEq for String<T, A>
-where T: CharBehavior + PartialEq,
+where T: CharBehavior  + PartialEq,
       A: Allocator + Clone
 {
     fn eq(&self, other: &Self) -> bool {
@@ -274,7 +275,7 @@ where T: CharBehavior + PartialEq,
 }
 
 impl<T, A> PartialOrd for String<T, A>
-where T: CharBehavior + PartialOrd,
+where T: CharBehavior  + PartialEq,
       A: Allocator + Clone
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -353,7 +354,7 @@ where A: Allocator + Clone
 }
 
 impl<T, A> Hash for String<T, A>
-where T: CharBehavior + PartialEq,
+where T: CharBehavior  + PartialEq,
       A: Allocator + Clone
 {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -362,7 +363,7 @@ where T: CharBehavior + PartialEq,
 }
 
 impl<T, A> Clone for String<T, A>
-where T: CharBehavior + PartialEq,
+where T: CharBehavior  + PartialEq,
       A: Allocator + Clone
 {
     fn clone(&self) -> Self {
