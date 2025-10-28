@@ -501,3 +501,221 @@ pub mod tests {
         Ok(())
     }
 }
+
+#[repr(C)]
+pub struct StringView<T = u8, A = Global>
+where T: CharBehavior  + PartialEq,
+      A: Allocator + Clone
+{
+    ptr: NonNull<T>,
+    size: usize,
+    _allocator: A
+}
+
+impl StringView<u8, Global> {
+    pub fn new() -> Self { Self::new_using(Global) }
+    pub fn from_str(text: &str) -> Self { Self::from_str_in(text, Global) }
+}
+
+impl StringView<u16, Global> {
+    pub fn new_wide() -> Self { Self::new_using_wide(Global) }
+    pub fn from_str_wide(text: &str) -> Self { Self::from_str_in_wide(text, Global) }
+}
+
+impl<A> StringView<u8, A>
+where A: Allocator + Clone
+{
+    pub fn new_using(alloc: A) -> Self { Self::new_in(alloc) }
+}
+
+impl<A> StringView<u16, A>
+where A: Allocator + Clone
+{
+    pub fn new_using_wide(alloc: A) -> Self { Self::new_in(alloc) }
+}
+
+impl<T, A> StringView<T, A>
+where T: CharBehavior  + PartialEq,
+      A: Allocator + Clone
+{
+    pub fn new_in(alloc: A) -> Self {
+        assert_eq!(size_of::<A>(), 0, "Allocator must be zero-sized!");
+        Self {
+            ptr: NonNull::dangling(),
+            size: 0,
+            _allocator: alloc,
+        }
+    }
+
+    fn get_ptr(&self) -> *const T {
+        self.ptr.as_ptr()
+    }
+
+    fn get_ptr_mut(&mut self) -> *mut T {
+        self.get_ptr() as *mut _
+    }
+
+    pub fn get_size(&self) -> usize {
+        self.size
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.get_ptr() as *const u8, self.size * size_of::<T>()) }
+    }
+
+    unsafe fn get_layout(&self) -> Layout {
+        Self::get_layout_static(self.get_size())
+    }
+
+    unsafe fn get_layout_static(size: usize) -> Layout {
+        Layout::from_size_align_unchecked(
+            size_of::<T>() * size,
+            align_of::<T>()
+        )
+    }
+}
+
+impl<A> StringView<u8, A>
+where A: Allocator + Clone
+{
+    pub fn from_str_in(text: &str, alloc: A) -> Self {
+        let mut new = Self::new_in(alloc);
+        let has_null_term = text.as_bytes().last().map_or(false, |c| *c == 0);
+        let new_size = text.len() + (1 * Into::<usize>::into(has_null_term));
+        new.ptr = unsafe { new._allocator.allocate(Self::get_layout_static(new_size)).unwrap().cast() };
+        new.size = new_size;
+        // string slice is already UTF-8, so just memcpy it
+        unsafe { std::ptr::copy_nonoverlapping(text.as_ptr(), new.get_ptr_mut(), text.len()); }
+        // add the null terminator if needed
+        if !has_null_term {
+            unsafe { *new.get_ptr_mut().add(new_size) = 0 };
+        }
+        new
+    }
+}
+
+impl<A> StringView<u16, A>
+where A: Allocator + Clone
+{
+    pub fn from_str_in_wide(text: &str, alloc: A) -> Self {
+        let mut new = Self::new_in(alloc);
+        let has_null_term = text.as_bytes().last().map_or(false, |c| *c == 0);
+        let new_size = text.len() + (1 * Into::<usize>::into(has_null_term));
+        new.ptr = unsafe { new._allocator.allocate(Self::get_layout_static(new_size)).unwrap().cast() };
+        new.size = new_size;
+        let utf16: Vec<u16> = text.encode_utf16().collect(); // convert UTF-8 => UTF-16
+        unsafe { std::ptr::copy_nonoverlapping(utf16.as_ptr(), new.get_ptr_mut(), utf16.len()); }
+        if !has_null_term {
+            unsafe { *new.get_ptr_mut().add(new_size) = 0 };
+        }
+        new
+    }
+}
+
+impl<T, A> Drop for StringView<T, A>
+where T: CharBehavior  + PartialEq,
+      A: Allocator + Clone
+{
+    fn drop(&mut self) {
+        if self.size > 0 {
+            let ptr = unsafe { NonNull::new_unchecked(self.get_ptr() as *mut u8) };
+            unsafe { self._allocator.deallocate(ptr, self.get_layout()); }
+        }
+    }
+}
+
+impl<T, A> PartialEq for StringView<T, A>
+where T: CharBehavior + PartialEq,
+      A: Allocator + Clone
+{
+    fn eq(&self, other: &Self) -> bool {
+        if self.size != other.size { return false; }
+        let sp = self.get_ptr();
+        let op = other.get_ptr();
+        for i in 0..self.size {
+            unsafe { if *sp.add(i) != *op.add(i) {
+                return false;
+            }}
+        }
+        true
+    }
+}
+
+impl<A> From<&StringView<u8, A>> for &str
+where A: Allocator + Clone
+{
+    fn from(value: &StringView<u8, A>) -> Self {
+        if value.size > 0 {
+            let vp = value.get_ptr();
+            let s = unsafe { std::slice::from_raw_parts(vp, value.size) };
+            unsafe { std::str::from_utf8_unchecked(s) }
+        } else {
+            ""
+        }
+    }
+}
+
+impl<A> From<&StringView<u8, A>> for RustString
+where A: Allocator + Clone
+{
+    fn from(value: &StringView<u8, A>) -> Self {
+        let vp = value.get_ptr();
+        let s = unsafe { std::slice::from_raw_parts(vp, value.size) };
+        Self::from(unsafe {std::str::from_utf8_unchecked(s)})
+    }
+}
+
+impl<A> From<&StringView<u16, A>> for RustString
+where A: Allocator + Clone
+{
+    fn from(value: &StringView<u16, A>) -> Self {
+        let vp = value.get_ptr();
+        let s = unsafe { std::slice::from_raw_parts(vp, value.size) };
+        RustString::from_utf16_lossy(s)
+    }
+}
+
+impl<A> Debug for StringView<u8, A>
+where A: Allocator + Clone
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let as_str: &str = self.into();
+        write!(f, "StringView {{ text: \"{}\", len: {} }}", as_str, self.size)
+    }
+}
+
+impl<A> Debug for StringView<u16, A>
+where A: Allocator + Clone
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let as_str: RustString = self.into();
+        write!(f, "StringView {{ text: \"{}\", len: {} }}", &as_str, self.size)
+    }
+}
+
+impl<A> Display for StringView<u8, A>
+where A: Allocator + Clone
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let as_str: &str = self.into();
+        write!(f, "\"{}\"", as_str)
+    }
+}
+
+impl<A> Display for StringView<u16, A>
+where A: Allocator + Clone
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let as_str: RustString = self.into();
+        write!(f, "\"{}\"", &as_str)
+    }
+}
+
+impl<T, A> Hash for StringView<T, A>
+where T: CharBehavior  + PartialEq,
+      A: Allocator + Clone
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write(self.as_bytes())
+    }
+}
