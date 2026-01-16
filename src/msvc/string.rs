@@ -27,7 +27,7 @@ pub union StringStorage<T: CharBehavior > {
 impl<T: CharBehavior > StringStorage<T> {
     fn new() -> Self {
         Self {
-            buf: MaybeUninit::uninit()
+            buf: MaybeUninit::zeroed()
         }
     }
     fn get_buf(&self) -> *mut T {
@@ -81,7 +81,7 @@ where T: CharBehavior  + PartialEq,
         Self {
             storage: StringStorage::new(),
             size: 0,
-            capacity: (MAX_STORAGE_SIZE / size_of::<T>() - 1),
+            capacity: MAX_STORAGE_SIZE / size_of::<T>() - 1,
             _allocator: alloc,
             _char_type: PhantomData
         }
@@ -133,17 +133,15 @@ where T: CharBehavior  + PartialEq,
         // Get pointer to old allocation
         let old = self.get_ptr();
         let was_inline = self.is_inline();
-        // let to_copy = self.capacity.min(new);
         self.capacity = if Self::can_inline(new) { MAX_STORAGE_SIZE - 1 } else { new };
         // Point to new allocation and copy old info
         unsafe {
-            // copy self.size + 1 elements (include null terminator)
             match self.is_inline() {
-                true => if self.size > 0 { std::ptr::copy(old, self.storage.get_buf(), self.size + 1); },
+                true => if self.size > 0 { std::ptr::copy(old, self.storage.get_buf(), self.size); },
                 false => {
-                    let new = self._allocator.allocate(self.get_layout()).unwrap().as_ptr() as *mut T;
+                    let new = self._allocator.allocate_zeroed(self.get_layout()).unwrap().as_ptr() as *mut T;
                     if self.size > 0 {
-                        std::ptr::copy_nonoverlapping(old, new, self.size + 1);
+                        std::ptr::copy_nonoverlapping(old, new, self.size);
                         if !was_inline { self.drop_inner() }
                     }
                     self.storage.ptr = NonNull::new_unchecked(new);
@@ -179,17 +177,13 @@ where A: Allocator + Clone
 {
     pub fn from_str_in(text: &str, alloc: A) -> Self {
         let mut new = Self::new_in(alloc);
-        let has_null_term = text.as_bytes().last().map_or(false, |c| *c == 0);
-        let new_size = text.len() + (1 * Into::<usize>::into(has_null_term));
-        let new_cap = ((new_size + (MAX_STORAGE_SIZE - 1)) & !(MAX_STORAGE_SIZE - 1)) - 1;
-        new.resize(new_cap);
+        // +1 to account for null terminator
+        let full_len = text.len() + 1;
+        let cap = ((full_len + (MAX_STORAGE_SIZE - 1)) & !(MAX_STORAGE_SIZE - 1)) - 1;
+        new.resize(cap);
         // string slice is already UTF-8, so just memcpy it
         unsafe { std::ptr::copy_nonoverlapping(text.as_ptr(), new.get_ptr_mut(), text.len()); }
-        // add the null terminator if needed
-        new.size = new_size;
-        if !has_null_term {
-            unsafe { *new.get_ptr_mut().add(new_size) = 0 };
-        }
+        new.size = text.len();
         new
     }
 
@@ -199,15 +193,10 @@ where A: Allocator + Clone
     }
 
     pub fn push_str(&mut self, str: &str) {
-        // remove null terminator from string to push
-        let str = str.strip_suffix("\0").unwrap_or(str);
-        let has_null_term = self.as_bytes().last().map_or(false, |c| *c == 0);
-        let new_len = self.len() + str.len() + (1 * Into::<usize>::into(has_null_term));
-        self.grow_capacity(new_len);
+        // +1 to account for null terminator
+        let full_len = self.len() + str.len() + 1;
+        self.grow_capacity(full_len);
         unsafe { std::ptr::copy_nonoverlapping(str.as_ptr(), self.get_ptr_mut().add(self.len()), str.len()); }
-        if !has_null_term {
-            unsafe { *self.get_ptr_mut().add(new_len) = 0 };
-        }
         self.size += str.len();
     }
 }
@@ -217,31 +206,23 @@ where A: Allocator + Clone
 {
     pub fn from_str_in_wide(text: &str, alloc: A) -> Self {
         let mut new = Self::new_in(alloc);
-        let has_null_term = text.as_bytes().last().map_or(false, |c| *c == 0);
-        let new_size = text.len() + (1 * Into::<usize>::into(has_null_term));
+        // +1 to account for null terminator
+        let full_len = text.len() + 1;
         let c0 = (MAX_STORAGE_SIZE / size_of::<u16>()) - 1;
-        let new_cap = ((new_size + c0) & !c0) - 1;
+        let new_cap = ((full_len + c0) & !c0) - 1;
         new.resize(new_cap);
         let utf16: Vec<u16> = text.encode_utf16().collect(); // convert UTF-8 => UTF-16
         unsafe { std::ptr::copy_nonoverlapping(utf16.as_ptr(), new.get_ptr_mut(), utf16.len()); }
-        new.size = new_size;
-        if !has_null_term {
-            unsafe { *new.get_ptr_mut().add(new_size) = 0 };
-        }
+        new.size = text.len();
         new
     }
 
     pub fn push_str(&mut self, str: &str) {
-        // remove null terminator from string to push
-        let str = str.strip_suffix("\0").unwrap_or(str);
-        let has_null_term = self.as_bytes().last().map_or(false, |c| *c == 0);
-        let new_len = self.len() + str.len() + (1 * Into::<usize>::into(has_null_term));
+        // +1 to account for null terminator
+        let new_len = self.len() + str.len() + 1;
         self.grow_capacity(new_len);
         let utf16: Vec<u16> = str.encode_utf16().collect(); // convert UTF-8 => UTF-16
         unsafe { std::ptr::copy_nonoverlapping(utf16.as_ptr(), self.get_ptr_mut().add(self.len()), utf16.len()); }
-        if !has_null_term {
-            unsafe { *self.get_ptr_mut().add(new_len) = 0 };
-        }
         self.size += str.len();
     }
 }
@@ -373,7 +354,7 @@ where T: CharBehavior  + PartialEq,
             // make new allocation
             unsafe {
                 let mut out = StringStorage::new();
-                let new = self._allocator.allocate(self.get_layout()).unwrap().as_ptr() as *mut T;
+                let new = self._allocator.allocate_zeroed(self.get_layout()).unwrap().as_ptr() as *mut T;
                 if self.size > 0 {
                     std::ptr::copy_nonoverlapping(self.get_ptr(), new, self.capacity);
                 }
@@ -580,16 +561,12 @@ where A: Allocator + Clone
 {
     pub fn from_str_in(text: &str, alloc: A) -> Self {
         let mut new = Self::new_in(alloc);
-        let has_null_term = text.as_bytes().last().map_or(false, |c| *c == 0);
-        let new_size = text.len() + (1 * Into::<usize>::into(has_null_term));
-        new.ptr = unsafe { new._allocator.allocate(Self::get_layout_static(new_size)).unwrap().cast() };
-        new.size = new_size;
+        // +1 to account for null terminator
+        let new_size = text.len() + 1;
+        new.ptr = unsafe { new._allocator.allocate_zeroed(Self::get_layout_static(new_size)).unwrap().cast() };
+        new.size = text.len();
         // string slice is already UTF-8, so just memcpy it
         unsafe { std::ptr::copy_nonoverlapping(text.as_ptr(), new.get_ptr_mut(), text.len()); }
-        // add the null terminator if needed
-        if !has_null_term {
-            unsafe { *new.get_ptr_mut().add(new_size) = 0 };
-        }
         new
     }
 }
@@ -599,15 +576,12 @@ where A: Allocator + Clone
 {
     pub fn from_str_in_wide(text: &str, alloc: A) -> Self {
         let mut new = Self::new_in(alloc);
-        let has_null_term = text.as_bytes().last().map_or(false, |c| *c == 0);
-        let new_size = text.len() + (1 * Into::<usize>::into(has_null_term));
-        new.ptr = unsafe { new._allocator.allocate(Self::get_layout_static(new_size)).unwrap().cast() };
-        new.size = new_size;
+        // +1 to account for null terminator
+        let new_size = text.len() + 1;
+        new.ptr = unsafe { new._allocator.allocate_zeroed(Self::get_layout_static(new_size)).unwrap().cast() };
+        new.size = text.len();
         let utf16: Vec<u16> = text.encode_utf16().collect(); // convert UTF-8 => UTF-16
         unsafe { std::ptr::copy_nonoverlapping(utf16.as_ptr(), new.get_ptr_mut(), utf16.len()); }
-        if !has_null_term {
-            unsafe { *new.get_ptr_mut().add(new_size) = 0 };
-        }
         new
     }
 }
