@@ -1,25 +1,21 @@
-[package]
-name = "cpp-types"
-version = "0.2.0"
+[workspace]
+
+members = [
+    "cpp-types",
+    "cpp-types-macro",
+    "cpp-types-macro-impl"
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.3.0"
+authors = [ "Rirurin" ]
+homepage = "https://riri.wtf"
+repository = "https://github.com/rirurin/cpp-types"
+license-file = "LICENSE"
 edition = "2021"
 
-[dependencies]
-allocator-api2 = "0.2.21"
-
-[target.'cfg(windows)'.dependencies.windows]
-version = "0.61.1"
-features = [
-    "Win32_Foundation",
-    "Win32_System_Threading"
-]
-
-[features]
-default = ["clang", "gcc", "msvc"]
-clang = []
-gcc = []
-msvc = []
-
-# Optimized Release Build
+# Optimized Release Build, all the optimizations!!
 [profile.release]
 codegen-units = 1
 lto = true
@@ -29,3 +25,13 @@ strip = true  # Automatically strip symbols from the binary.
 [profile.release-debug]
 inherits = "release"
 debug = true # Allow us to debug using LLDB
+
+# Slow Debug, for fast iteration
+[profile.slow-debug]
+inherits = "release"
+debug = true
+# lto = true
+# lto = "thin"
+lto = false
+incremental = true
+codegen-units = 256

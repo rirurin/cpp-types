@@ -1,2 +1,6 @@
-/target
-Cargo.lock
+# Rust build files
+**/target
+**/Cargo.lock
+
+# Jetbrains IDE
+**/.idea/

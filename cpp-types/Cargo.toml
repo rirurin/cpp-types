@@ -1,0 +1,25 @@
+[package]
+name = "cpp-types"
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license-file.workspace = true
+edition.workspace = true
+
+[dependencies]
+allocator-api2 = "0.2.21"
+cpp-types-macro = { path = "../cpp-types-macro" }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.61.1"
+features = [
+    "Win32_Foundation",
+    "Win32_System_Threading"
+]
+
+[features]
+default = ["clang", "gcc", "msvc"]
+clang = []
+gcc = []
+msvc = []

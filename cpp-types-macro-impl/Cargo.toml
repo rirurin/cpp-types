@@ -1,0 +1,13 @@
+[package]
+name = "cpp-types-macro-impl"
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license-file.workspace = true
+edition.workspace = true
+
+[dependencies]
+proc-macro2 = { version = "1.0" }
+syn = { version = "2.0", features = ["full"] }
+quote = "1.0"

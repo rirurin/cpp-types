@@ -1,0 +1,16 @@
+[package]
+name = "cpp-types-macro"
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license-file.workspace = true
+edition.workspace = true
+
+[lib]
+doc = false
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+cpp-types-macro-impl = { path = "../cpp-types-macro-impl" }
