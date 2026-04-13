@@ -17,6 +17,7 @@ pub mod msvc {
     pub mod function;
     pub mod hash;
     pub mod list;
+    #[cfg(target_os = "windows")]
     pub mod mutex;
     pub mod optional;
     pub mod shared_ptr;
